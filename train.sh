@@ -89,16 +89,29 @@ git pull origin main || warn "git pull failed, continuing with local code"
 log "Killing previous training processes..."
 kill_training
 
+# ── EPyMARL ──────────────────────────────────────────────────────────────
+
+if [ ! -d "epymarl" ]; then
+    log "Cloning EPyMARL..."
+    git clone https://github.com/uoe-agents/epymarl.git
+fi
+
+log "Copying thesslink env config into EPyMARL..."
+cp epymarl_config/thesslink.yaml "$EPYMARL_SRC/config/envs/thesslink.yaml"
+
+# ── Virtualenv ───────────────────────────────────────────────────────────
+
 if [ ! -f "$VENV" ]; then
     log "Creating virtualenv..."
     python3 -m venv .venv
 fi
 log "Activating virtualenv..."
 source "$VENV"
-log "Installing project in editable mode..."
+log "Installing dependencies..."
 pip install -e . --quiet
+pip install -r epymarl/requirements.txt --quiet
 
-# Validate algorithm names (after git pull so config files exist)
+# Validate algorithm names
 for alg in "${ALGOS[@]}"; do
     if [ ! -f "$EPYMARL_SRC/config/algs/${alg}.yaml" ]; then
         err "Unknown algorithm: $alg"
