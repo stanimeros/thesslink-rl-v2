@@ -8,11 +8,10 @@ Multi-Agent Reinforcement Learning environment where two agents **negotiate** ov
 |---|---|
 | `thesslink_rl/environment.py` | Core env -- 10x10 grid, obstacles, POIs, negotiation + navigation phases |
 | `thesslink_rl/evaluation.py` | POI preference scoring (energy, privacy) and Golden Mean reward |
-| `thesslink_rl/negotiation.py` | (Deprecated) Negotiation is now RL-trained within the environment |
 | `thesslink_rl/gym_wrapper.py` | Gymnasium multi-agent wrapper for EPyMARL compatibility |
 | `thesslink_rl/visualization.py` | Grid rendering, training curves, episode replay GIF |
 | `thesslink_rl/models/` | Agent type configs (YAML): human, taxi, drone |
-| `epymarl_config/thesslink.yaml` | Ready-to-use EPyMARL env config |
+| `epymarl/src/config/envs/thesslink.yaml` | EPyMARL env config |
 
 ## Quick Start
 

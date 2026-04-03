@@ -2,29 +2,34 @@ git pull origin main
 rm -rf epymarl/results/*
 source .venv/bin/activate
 
-pkill -f train.py; pkill -f "epymarl/src/main.py"
-python3 train.py --alg iql qmix vdn mappo coma --extra "t_max=1000 save_model=True save_model_interval=200"
-nohup python3 train.py --alg iql --extra "save_model=True save_model_interval=20000" > epymarl/results/training_iql.log 2>&1 &
-nohup python3 train.py --alg qmix --extra "save_model=True save_model_interval=20000" > epymarl/results/training_qmix.log 2>&1 &
-nohup python3 train.py --alg vdn --extra "save_model=True save_model_interval=20000" > epymarl/results/training_vdn.log 2>&1 &
-nohup python3 train.py --alg mappo --extra "save_model=True save_model_interval=20000" > epymarl/results/training_mappo.log 2>&1 &
-nohup python3 train.py --alg coma --extra "save_model=True save_model_interval=20000" > epymarl/results/training_coma.log 2>&1 &
+pkill -f "epymarl/src/run.py"
 
-watch -n 2 "echo 'ALG | T_ENV | RETURN | SUCC% | AGREE% | CONS% | EP_LEN' && \
-echo '----|-------|--------|-------|--------|-------|------' && \
+# Single algorithm (foreground)
+python epymarl/src/run.py --config=qmix --env-config=thesslink with t_max=500000 save_model=True save_model_interval=50000
+
+# Multiple algorithms (background)
+nohup python epymarl/src/run.py --config=iql --env-config=thesslink with save_model=True save_model_interval=50000 > epymarl/results/training_iql.log 2>&1 &
+nohup python epymarl/src/run.py --config=qmix --env-config=thesslink with save_model=True save_model_interval=50000 > epymarl/results/training_qmix.log 2>&1 &
+nohup python epymarl/src/run.py --config=vdn --env-config=thesslink with save_model=True save_model_interval=50000 > epymarl/results/training_vdn.log 2>&1 &
+nohup python epymarl/src/run.py --config=mappo --env-config=thesslink with save_model=True save_model_interval=50000 > epymarl/results/training_mappo.log 2>&1 &
+nohup python epymarl/src/run.py --config=coma --env-config=thesslink with save_model=True save_model_interval=50000 > epymarl/results/training_coma.log 2>&1 &
+
+# Monitor training progress
+watch -n 5 "echo 'ALG  | T_ENV   | RETURN  | REACH%  | EP_LEN' && \
+echo '-----|---------|---------|---------|-------' && \
 for alg in iql qmix vdn mappo coma; do \
   log=\"epymarl/results/training_\${alg}.log\"; \
   if [ -f \"\$log\" ]; then \
     tenv=\$(grep -a 't_env:' \"\$log\" | tail -n 1 | awk -F't_env: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
     ret=\$(grep -a 'test_return_mean:' \"\$log\" | tail -n 1 | awk -F'test_return_mean: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
-    succ=\$(grep -a 'test_grid_poi_success_mean:' \"\$log\" | tail -n 1 | awk -F'test_grid_poi_success_mean: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
-    agr=\$(grep -a 'test_grid_poi_agreement_rate_mean:' \"\$log\" | tail -n 1 | awk -F'test_grid_poi_agreement_rate_mean: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
-    cons=\$(grep -a 'test_grid_poi_consensus_mean:' \"\$log\" | tail -n 1 | awk -F'test_grid_poi_consensus_mean: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
+    reach=\$(grep -a 'test_battle_won_mean:' \"\$log\" | tail -n 1 | awk -F'test_battle_won_mean: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
     eplen=\$(grep -a 'test_ep_length_mean:' \"\$log\" | tail -n 1 | awk -F'test_ep_length_mean: ' '{print \$2}' | awk '{print \$1}' | tr -d ','); \
     case \$alg in iql) n='IQL ';; qmix) n='QMIX';; vdn) n='VDN ';; mappo) n='MAPPO';; coma) n='COMA';; esac; \
-    s_perc=\$(echo \"\${succ:-0} * 100\" | bc -l); \
-    a_perc=\$(echo \"\${agr:-0} * 100\" | bc -l); \
-    c_perc=\$(echo \"\${cons:-0} * 100\" | bc -l); \
-    printf \"%4s|%7s|%8.1f|%6.1f%%|%7.1f%%|%6.1f%%|%6.1f\\n\" \"\$n\" \"\${tenv:-0}\" \"\${ret:-0}\" \"\$s_perc\" \"\$a_perc\" \"\$c_perc\" \"\${eplen:-0}\"; \
+    r_perc=\$(echo \"\${reach:-0} * 100\" | bc -l); \
+    printf '%5s|%9s|%9.4f|%8.1f%%|%7.1f\n' \"\$n\" \"\${tenv:-0}\" \"\${ret:-0}\" \"\$r_perc\" \"\${eplen:-0}\"; \
   fi; \
 done"
+
+# Plot results with EPyMARL's built-in plotter
+python epymarl/plot_results.py --path=epymarl/results --metric=test_return_mean --save_dir=plots
+python epymarl/plot_results.py --path=epymarl/results --metric=test_battle_won_mean --save_dir=plots
