@@ -104,6 +104,10 @@ source "$VENV"
 if [ ! -d "epymarl" ]; then
     log "Cloning EPyMARL..."
     git clone https://github.com/uoe-agents/epymarl.git
+
+    log "Installing dependencies..."
+    pip install -r epymarl/requirements.txt --quiet
+    pip install -e . --quiet
 fi
 
 log "Copying thesslink env config into EPyMARL..."
@@ -112,12 +116,6 @@ cp epymarl_config/thesslink.yaml "$EPYMARL_SRC/config/envs/thesslink.yaml"
 log "Applying patches to EPyMARL..."
 git -C epymarl checkout -- . 2>/dev/null || true
 git -C epymarl apply ../epymarl_config/patches/epymarl.patch && log "Patches applied." || warn "Patches already applied or failed."
-
-# ── Dependencies ─────────────────────────────────────────────────────────
-
-log "Installing dependencies..."
-pip install -r epymarl/requirements.txt --quiet
-pip install -e . --quiet
 
 # Validate algorithm names
 for alg in "${ALGOS[@]}"; do
