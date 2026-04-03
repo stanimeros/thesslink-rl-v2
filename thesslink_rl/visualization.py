@@ -1,9 +1,9 @@
-"""Visualization: grid rendering, training curves, and episode replay."""
+"""Visualization: grid rendering, evaluation heatmaps, training curves, and episode replay."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
@@ -12,6 +12,7 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 
 from .environment import GRID_SIZE, NUM_POIS, ACT_SUGGEST_BASE, GridNegotiationEnv
+from .evaluation import AgentConfig, _energy_score, _privacy_score
 
 COLORS = {
     "empty": "#f0f0f0",
@@ -102,7 +103,128 @@ def render_grid(
     return ax
 
 
-# ── 2. Training curves ──────────────────────────────────────────────────
+# ── 2. Evaluation heatmaps ───────────────────────────────────────────────
+
+def _compute_eval_heatmap(
+    spawn: tuple[int, int],
+    cfg: AgentConfig,
+) -> np.ndarray:
+    """Compute the blended (energy + privacy) score for every grid cell."""
+    heatmap = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)
+    p = cfg.privacy_emphasis
+    for r in range(GRID_SIZE):
+        for c in range(GRID_SIZE):
+            e = _energy_score(spawn, (r, c), cfg)
+            priv = _privacy_score(spawn, (r, c))
+            heatmap[r, c] = (1.0 - p) * e + p * priv
+    return heatmap
+
+
+def _draw_heatmap_panel(
+    ax: plt.Axes,
+    heatmap: np.ndarray,
+    env: GridNegotiationEnv,
+    agent: str,
+    cfg: AgentConfig,
+    spawn: tuple[int, int],
+    current_pos: tuple[int, int] | None = None,
+    subtitle: str | None = None,
+):
+    """Draw a single heatmap panel with POI scores, obstacles, and agent marker."""
+    poi_keys = ["poi_0", "poi_1", "poi_2"]
+    heatmap_masked = np.ma.array(heatmap, mask=env.obstacle_map)
+
+    ax.imshow(
+        heatmap_masked, cmap="RdYlGn", vmin=0, vmax=1,
+        origin="upper", extent=(0, GRID_SIZE, GRID_SIZE, 0),
+        interpolation="nearest",
+    )
+
+    for r in range(GRID_SIZE):
+        for c in range(GRID_SIZE):
+            if env.obstacle_map[r, c]:
+                ax.add_patch(plt.Rectangle(
+                    (c, r), 1, 1,
+                    facecolor=COLORS["obstacle"], edgecolor="none", zorder=2,
+                ))
+
+    for i, (pr, pc) in enumerate(env.poi_positions):
+        score = heatmap[pr, pc]
+        marker = "^" if env.agreed_poi == i else "D"
+        size = 200 if env.agreed_poi == i else 120
+        ax.scatter(pc + 0.5, pr + 0.5, marker=marker, s=size,
+                   c=COLORS[poi_keys[i]], edgecolors="white",
+                   linewidths=1.5, zorder=4)
+        ax.text(pc + 0.5, pr + 0.15, f"P{i}: {score:.2f}",
+                ha="center", va="center", fontsize=6,
+                fontweight="bold", color="white",
+                bbox=dict(boxstyle="round,pad=0.15", fc="black", alpha=0.5),
+                zorder=5)
+
+    show_pos = current_pos if current_pos is not None else spawn
+    pr, pc = show_pos
+    sr, sc = spawn
+
+    if current_pos is not None and (sr, sc) != (pr, pc):
+        ax.scatter(sc + 0.5, sr + 0.5, marker="*", s=180,
+                   c=COLORS[agent], edgecolors="white", linewidths=1,
+                   zorder=6)
+
+    ax.scatter(pc + 0.5, pr + 0.5, marker="o", s=260,
+               c=COLORS[agent], edgecolors="white", linewidths=2, zorder=7)
+    ax.text(pc + 0.5, pr + 0.5, agent[-1], ha="center", va="center",
+            fontsize=9, fontweight="bold", color="white", zorder=8)
+
+    ax.set_xticks(range(GRID_SIZE + 1))
+    ax.set_yticks(range(GRID_SIZE + 1))
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.grid(True, color="#cccccc", linewidth=0.5)
+    ax.set_xlim(0, GRID_SIZE)
+    ax.set_ylim(GRID_SIZE, 0)
+    ax.set_title(subtitle or f"{cfg.name} eval (from spawn)", fontsize=10)
+
+
+def render_eval_heatmaps(
+    env: GridNegotiationEnv,
+    agent_configs: Dict[str, AgentConfig],
+    title: str = "",
+    show: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """Draw a 3-panel image: agent_0 heatmap | grid | agent_1 heatmap.
+
+    Heatmaps are computed from spawn positions and show per-POI scores.
+    """
+    agents = env.possible_agents
+    fig, (ax_left, ax_mid, ax_right) = plt.subplots(1, 3, figsize=(19, 6))
+    agent_axes = {agents[0]: ax_left, agents[1]: ax_right}
+
+    render_grid(env, title="Initial State", ax=ax_mid, show=False)
+
+    for agent in agents:
+        ax = agent_axes[agent]
+        cfg = agent_configs[agent]
+        spawn = tuple(env.spawn_positions[agent])
+        heatmap = _compute_eval_heatmap(spawn, cfg)
+        _draw_heatmap_panel(
+            ax, heatmap, env, agent, cfg, spawn,
+            subtitle=f"{cfg.name} ({agent})\np={cfg.privacy_emphasis}  energy={cfg.energy_model}",
+        )
+
+    plt.tight_layout()
+    fig.suptitle(title or "Agent Evaluation Heatmaps", fontsize=13, y=1.02)
+
+    if save_path:
+        _ensure_out_dir()
+        fig.savefig(OUT_DIR / save_path, dpi=150, bbox_inches="tight")
+    if show:
+        plt.show()
+    plt.close(fig)
+    return fig
+
+
+# ── 3. Training curves ──────────────────────────────────────────────────
 
 def plot_training_curves(
     stats: Dict[str, list],
@@ -150,30 +272,63 @@ def plot_training_curves(
 def replay_episode(
     frames: list[dict],
     env: GridNegotiationEnv,
+    agent_configs: Optional[Dict[str, AgentConfig]] = None,
     save_path: str = "episode_replay.gif",
     interval_ms: int = 400,
     show: bool = True,
 ):
     """Animate an episode from a list of frame snapshots.
 
-    Each frame dict: {"agent_positions": {name: [r,c]}, "phase": str,
-                      "timestep": int, "agreed_poi": int|None,
-                      "last_suggestion": {name: int}}
+    If *agent_configs* is provided, each frame renders the grid in the
+    centre with evaluation heatmaps for each agent on either side (3-panel
+    layout).  Heatmaps are fixed from the spawn position and do not change
+    as agents move.  Otherwise falls back to a single-panel grid view.
     """
-    fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+    has_heatmaps = agent_configs is not None
+    agents = env.possible_agents
+    poi_keys = ["poi_0", "poi_1", "poi_2"]
+
+    if has_heatmaps:
+        fig, axes = plt.subplots(1, 3, figsize=(19, 6))
+        ax_left, ax_mid, ax_right = axes
+        agent_axes = {agents[0]: ax_left, agents[1]: ax_right}
+
+        spawn_positions = frames[0].get(
+            "spawn_positions", frames[0]["agent_positions"]
+        )
+        heatmaps: Dict[str, np.ndarray] = {}
+        for agent in agents:
+            spawn = tuple(spawn_positions[agent])
+            heatmaps[agent] = _compute_eval_heatmap(spawn, agent_configs[agent])
+    else:
+        fig, ax_mid = plt.subplots(1, 1, figsize=(6, 6))
 
     def _draw(idx):
-        ax.clear()
         frame = frames[idx]
         env.agent_positions = frame["agent_positions"]
         env.phase = frame["phase"]
         env.agreed_poi = frame.get("agreed_poi")
         env.last_suggestion = frame.get("last_suggestion", {})
-        render_grid(env, title=f"Step {frame['timestep']}", ax=ax, show=False)
+
+        ax_mid.clear()
+        render_grid(env, title=f"Step {frame['timestep']}", ax=ax_mid, show=False)
+
+        if has_heatmaps:
+            for agent in agents:
+                ax = agent_axes[agent]
+                ax.clear()
+                cfg = agent_configs[agent]
+                spawn = tuple(spawn_positions[agent])
+                cur_pos = tuple(frame["agent_positions"][agent])
+                _draw_heatmap_panel(
+                    ax, heatmaps[agent], env, agent, cfg, spawn,
+                    current_pos=cur_pos,
+                )
 
     anim = FuncAnimation(fig, _draw, frames=len(frames),
                          interval=interval_ms, repeat=False)
     _ensure_out_dir()
+    plt.tight_layout()
     anim.save(str(OUT_DIR / save_path), writer="pillow", dpi=100)
     if show:
         plt.show()
@@ -184,6 +339,7 @@ def capture_frame(env: GridNegotiationEnv) -> dict:
     """Snapshot the env state for replay_episode."""
     return {
         "agent_positions": {a: list(pos) for a, pos in env.agent_positions.items()},
+        "spawn_positions": {a: list(pos) for a, pos in env.spawn_positions.items()},
         "phase": env.phase,
         "timestep": env.timestep,
         "agreed_poi": getattr(env, "agreed_poi", None),
