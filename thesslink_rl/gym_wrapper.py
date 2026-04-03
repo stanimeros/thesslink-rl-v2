@@ -180,7 +180,7 @@ class GridNegotiationGymEnv(gym.Env):
                 quality = negotiation_quality(
                     self._agreed_poi, self._poi_scores, agents,
                 )
-                rewards = [quality * 10.0] * self.n_agents
+                rewards = [quality * 20.0] * self.n_agents
 
         done = all(terminated_d[a] for a in agents)
         truncated = all(truncated_d[a] for a in agents)
