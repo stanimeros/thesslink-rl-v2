@@ -89,6 +89,15 @@ git pull origin main || warn "git pull failed, continuing with local code"
 log "Killing previous training processes..."
 kill_training
 
+# ── Virtualenv ───────────────────────────────────────────────────────────
+
+if [ ! -f "$VENV" ]; then
+    log "Creating virtualenv..."
+    python3 -m venv .venv
+fi
+log "Activating virtualenv..."
+source "$VENV"
+
 # ── EPyMARL ──────────────────────────────────────────────────────────────
 
 if [ ! -d "epymarl" ]; then
@@ -99,14 +108,12 @@ fi
 log "Copying thesslink env config into EPyMARL..."
 cp epymarl_config/thesslink.yaml "$EPYMARL_SRC/config/envs/thesslink.yaml"
 
-# ── Virtualenv ───────────────────────────────────────────────────────────
+log "Applying patches to EPyMARL..."
+git -C epymarl checkout -- . 2>/dev/null || true
+git -C epymarl apply ../epymarl_config/patches/epymarl.patch && log "Patches applied." || warn "Patches already applied or failed."
 
-if [ ! -f "$VENV" ]; then
-    log "Creating virtualenv..."
-    python3 -m venv .venv
-fi
-log "Activating virtualenv..."
-source "$VENV"
+# ── Dependencies ─────────────────────────────────────────────────────────
+
 log "Installing dependencies..."
 pip install -e . --quiet
 pip install -r epymarl/requirements.txt --quiet
