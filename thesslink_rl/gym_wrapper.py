@@ -109,7 +109,8 @@ class GridNegotiationGymEnv(gym.Env):
             spawn = tuple(self._env.spawn_positions[agent])
             cfg = self._agent_configs.get(agent)
             scores = compute_poi_scores(
-                spawn, self._env.poi_positions, self._env.obstacle_map, cfg
+                spawn, spawn, self._env.poi_positions,
+                self._env.obstacle_map, cfg,
             )
             self._poi_scores[agent] = scores
             self._env.poi_scores[agent] = scores

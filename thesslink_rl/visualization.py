@@ -1,4 +1,8 @@
-"""Visualization: grid rendering, evaluation heatmaps, training curves, and episode replay."""
+"""Visualization: grid rendering, evaluation heatmaps, training curves, and episode replay.
+
+All scoring and heatmap computation is delegated to ``evaluation.py``.
+This module only handles rendering.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,11 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 
 from .environment import GRID_SIZE, NUM_POIS, ACT_SUGGEST_BASE, GridNegotiationEnv
-from .evaluation import AgentConfig, _energy_score, _privacy_score
+from .evaluation import (
+    AgentConfig,
+    compute_eval_heatmap,
+    compute_poi_scores,
+)
 
 COLORS = {
     "empty": "#f0f0f0",
@@ -103,22 +111,7 @@ def render_grid(
     return ax
 
 
-# ── 2. Evaluation heatmaps ───────────────────────────────────────────────
-
-def _compute_eval_heatmap(
-    spawn: tuple[int, int],
-    cfg: AgentConfig,
-) -> np.ndarray:
-    """Compute the blended (energy + privacy) score for every grid cell."""
-    heatmap = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)
-    p = cfg.privacy_emphasis
-    for r in range(GRID_SIZE):
-        for c in range(GRID_SIZE):
-            e = _energy_score(spawn, (r, c), cfg)
-            priv = _privacy_score(spawn, (r, c))
-            heatmap[r, c] = (1.0 - p) * e + p * priv
-    return heatmap
-
+# ── 2. Heatmap panel drawing ────────────────────────────────────────────
 
 def _draw_heatmap_panel(
     ax: plt.Axes,
@@ -127,6 +120,7 @@ def _draw_heatmap_panel(
     agent: str,
     cfg: AgentConfig,
     spawn: tuple[int, int],
+    poi_scores: np.ndarray,
     current_pos: tuple[int, int] | None = None,
     subtitle: str | None = None,
 ):
@@ -149,13 +143,12 @@ def _draw_heatmap_panel(
                 ))
 
     for i, (pr, pc) in enumerate(env.poi_positions):
-        score = heatmap[pr, pc]
         marker = "^" if env.agreed_poi == i else "D"
         size = 200 if env.agreed_poi == i else 120
         ax.scatter(pc + 0.5, pr + 0.5, marker=marker, s=size,
                    c=COLORS[poi_keys[i]], edgecolors="white",
                    linewidths=1.5, zorder=4)
-        ax.text(pc + 0.5, pr + 0.15, f"P{i}: {score:.2f}",
+        ax.text(pc + 0.5, pr + 0.15, f"P{i}: {poi_scores[i]:.2f}",
                 ha="center", va="center", fontsize=6,
                 fontweight="bold", color="white",
                 bbox=dict(boxstyle="round,pad=0.15", fc="black", alpha=0.5),
@@ -182,8 +175,10 @@ def _draw_heatmap_panel(
     ax.grid(True, color="#cccccc", linewidth=0.5)
     ax.set_xlim(0, GRID_SIZE)
     ax.set_ylim(GRID_SIZE, 0)
-    ax.set_title(subtitle or f"{cfg.name} eval (from spawn)", fontsize=10)
+    ax.set_title(subtitle or f"{cfg.name} eval", fontsize=10)
 
+
+# ── 3. Static 3-panel heatmap image ────────────────────────────────────
 
 def render_eval_heatmaps(
     env: GridNegotiationEnv,
@@ -194,7 +189,7 @@ def render_eval_heatmaps(
 ) -> plt.Figure:
     """Draw a 3-panel image: agent_0 heatmap | grid | agent_1 heatmap.
 
-    Heatmaps are computed from spawn positions and show per-POI scores.
+    Heatmaps are computed from spawn positions (current_pos = spawn).
     """
     agents = env.possible_agents
     fig, (ax_left, ax_mid, ax_right) = plt.subplots(1, 3, figsize=(19, 6))
@@ -206,9 +201,15 @@ def render_eval_heatmaps(
         ax = agent_axes[agent]
         cfg = agent_configs[agent]
         spawn = tuple(env.spawn_positions[agent])
-        heatmap = _compute_eval_heatmap(spawn, cfg)
+        heatmap = compute_eval_heatmap(
+            spawn, spawn, env.poi_positions, env.obstacle_map, cfg,
+        )
+        scores = compute_poi_scores(
+            spawn, spawn, env.poi_positions, env.obstacle_map, cfg,
+        )
         _draw_heatmap_panel(
             ax, heatmap, env, agent, cfg, spawn,
+            poi_scores=scores,
             subtitle=f"{cfg.name} ({agent})\np={cfg.privacy_emphasis}  energy={cfg.energy_model}",
         )
 
@@ -224,7 +225,7 @@ def render_eval_heatmaps(
     return fig
 
 
-# ── 3. Training curves ──────────────────────────────────────────────────
+# ── 4. Training curves ──────────────────────────────────────────────────
 
 def plot_training_curves(
     stats: Dict[str, list],
@@ -267,7 +268,7 @@ def plot_training_curves(
     plt.close(fig)
 
 
-# ── 3. Episode replay animation ─────────────────────────────────────────
+# ── 5. Episode replay animation ─────────────────────────────────────────
 
 def replay_episode(
     frames: list[dict],
@@ -280,26 +281,21 @@ def replay_episode(
     """Animate an episode from a list of frame snapshots.
 
     If *agent_configs* is provided, each frame renders the grid in the
-    centre with evaluation heatmaps for each agent on either side (3-panel
-    layout).  Heatmaps are fixed from the spawn position and do not change
-    as agents move.  Otherwise falls back to a single-panel grid view.
+    centre with **dynamic** evaluation heatmaps for each agent on either
+    side (3-panel layout).  Heatmaps are recomputed every frame from the
+    agent's current position (energy changes) while privacy stays fixed
+    from spawn.
     """
     has_heatmaps = agent_configs is not None
     agents = env.possible_agents
-    poi_keys = ["poi_0", "poi_1", "poi_2"]
 
     if has_heatmaps:
         fig, axes = plt.subplots(1, 3, figsize=(19, 6))
         ax_left, ax_mid, ax_right = axes
         agent_axes = {agents[0]: ax_left, agents[1]: ax_right}
-
         spawn_positions = frames[0].get(
             "spawn_positions", frames[0]["agent_positions"]
         )
-        heatmaps: Dict[str, np.ndarray] = {}
-        for agent in agents:
-            spawn = tuple(spawn_positions[agent])
-            heatmaps[agent] = _compute_eval_heatmap(spawn, agent_configs[agent])
     else:
         fig, ax_mid = plt.subplots(1, 1, figsize=(6, 6))
 
@@ -320,8 +316,17 @@ def replay_episode(
                 cfg = agent_configs[agent]
                 spawn = tuple(spawn_positions[agent])
                 cur_pos = tuple(frame["agent_positions"][agent])
+                heatmap = compute_eval_heatmap(
+                    cur_pos, spawn, env.poi_positions,
+                    env.obstacle_map, cfg,
+                )
+                scores = compute_poi_scores(
+                    cur_pos, spawn, env.poi_positions,
+                    env.obstacle_map, cfg,
+                )
                 _draw_heatmap_panel(
-                    ax, heatmaps[agent], env, agent, cfg, spawn,
+                    ax, heatmap, env, agent, cfg, spawn,
+                    poi_scores=scores,
                     current_pos=cur_pos,
                 )
 
