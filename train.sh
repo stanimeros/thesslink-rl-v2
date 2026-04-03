@@ -115,8 +115,8 @@ git -C epymarl apply ../epymarl_config/patches/epymarl.patch && log "Patches app
 # ── Dependencies ─────────────────────────────────────────────────────────
 
 log "Installing dependencies..."
-pip install -e . --quiet
 pip install -r epymarl/requirements.txt --quiet
+pip install -e . --quiet
 
 # Validate algorithm names
 for alg in "${ALGOS[@]}"; do
