@@ -160,38 +160,36 @@ def generate_plots(metrics: dict, algo: str = "qmix"):
                          save_path=True, show=False, algo=algo)
     print(f"         -> plots/{fname}")
 
-    # --- 3c. Episode replay GIF (random-action demo) ---
-    env2 = GridNegotiationEnv(agent_configs=agent_configs, seed=123)
-    env2.reset(seed=123)
-
+    # --- 3c. Episode replay GIF (random-action demo, same env/map) ---
+    env.reset(seed=42)
     for agent in agents:
-        spawn = tuple(env2.spawn_positions[agent])
+        spawn = tuple(env.spawn_positions[agent])
         scores = compute_poi_scores(
-            spawn, spawn, env2.poi_positions, env2.obstacle_map,
+            spawn, spawn, env.poi_positions, env.obstacle_map,
             agent_configs[agent],
         )
-        env2.poi_scores[agent] = scores
+        env.poi_scores[agent] = scores
 
     rng = np.random.RandomState(99)
-    frames = [capture_frame(env2)]
+    frames = [capture_frame(env)]
 
     for step in range(40):
         actions = {}
-        for agent in env2.agents:
-            avail = env2.get_avail_actions(agent)
+        for agent in env.agents:
+            avail = env.get_avail_actions(agent)
             valid = [i for i, a in enumerate(avail) if a == 1]
             actions[agent] = rng.choice(valid)
 
-        if not env2.agents:
+        if not env.agents:
             break
-        obs, rewards, terminated, truncated, infos = env2.step(actions)
-        frames.append(capture_frame(env2))
+        obs, rewards, terminated, truncated, infos = env.step(actions)
+        frames.append(capture_frame(env))
         if all(terminated.values()) or all(truncated.values()):
             break
 
     fname = _make_filename("episode_replay", "gif", algo)
     print(f"  [3/3] Episode replay GIF...")
-    replay_episode(frames, env2, agent_configs=agent_configs,
+    replay_episode(frames, env, agent_configs=agent_configs,
                    save_path=True, show=False, algo=algo)
     print(f"         -> plots/{fname}")
 
