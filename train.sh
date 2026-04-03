@@ -31,6 +31,7 @@ kill_training() {
 }
 
 show_status() {
+    export LC_NUMERIC=C
     echo ""
     echo " ALG  |   T_ENV |   RETURN | REACH% | EP_LEN"
     echo "------|---------|----------|--------|-------"
