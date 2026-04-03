@@ -1,0 +1,10 @@
+name: Taxi
+privacy_emphasis: 0.88
+max_steps: 100
+
+energy_model: linear
+energy_per_step: 1.0
+energy_exponential_gamma: 0.12
+
+operational_type: full_grid
+max_radius_cells: null

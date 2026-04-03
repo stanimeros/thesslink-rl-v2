@@ -1,0 +1,10 @@
+name: Human
+privacy_emphasis: 1.0
+max_steps: 20
+
+energy_model: exponential
+energy_per_step: 1.0
+energy_exponential_gamma: 0.12
+
+operational_type: full_grid
+max_radius_cells: null
