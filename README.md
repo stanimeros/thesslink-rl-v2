@@ -61,7 +61,7 @@ Or use the gymma config directly without copying:
 
 ```bash
 python src/main.py --config=qmix --env-config=gymma \
-  with env_args.time_limit=60 env_args.key="thesslink/GridNegotiation-v0"
+  with env_args.time_limit=60 env_args.key="thesslink_rl:thesslink/GridNegotiation-v0"
 ```
 
 ## How It Works
