@@ -7,12 +7,9 @@ Two phases per episode, both controlled by RL:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
-
-if TYPE_CHECKING:
-    from .evaluation import AgentConfig
 
 GRID_SIZE = 10
 NUM_OBSTACLES = 10
@@ -21,12 +18,6 @@ NUM_AGENTS = 2
 COMM_DIM = NUM_POIS
 MAX_EPISODE_STEPS = 60
 
-# Movement actions (navigation phase)
-ACT_STAY = 0
-ACT_UP = 1
-ACT_DOWN = 2
-ACT_LEFT = 3
-ACT_RIGHT = 4
 NUM_MOVE_ACTIONS = 5
 
 # Negotiation actions
@@ -41,16 +32,13 @@ CH_POI = 1
 CH_SELF = 2
 NUM_CHANNELS = 3
 
-# Navigation obs: grid (C*H*W) + comm (COMM_DIM) = 303
-NAV_OBS_SIZE = NUM_CHANNELS * GRID_SIZE * GRID_SIZE + COMM_DIM
-
 # Negotiation obs: own POI scores (NUM_POIS) + peer last action one-hot (NUM_SUGGEST_ACTIONS + 1)
 # The +1 is for "no action yet" at episode start
 PEER_ACTION_DIM = NUM_SUGGEST_ACTIONS + 1  # 4: [suggest_0, suggest_1, suggest_2, no_action]
 NEG_OBS_RAW_SIZE = NUM_POIS + PEER_ACTION_DIM  # 7
 
-# Flat observation size is the max of both phases
-OBS_FLAT_SIZE = NAV_OBS_SIZE  # 303 (negotiation obs is zero-padded to this)
+# Flat observation size: grid (C*H*W) + comm, negotiation obs is zero-padded to this
+OBS_FLAT_SIZE = NUM_CHANNELS * GRID_SIZE * GRID_SIZE + COMM_DIM  # 303
 
 
 class GridNegotiationEnv:
@@ -65,7 +53,7 @@ class GridNegotiationEnv:
 
     def __init__(
         self,
-        agent_configs: Dict[str, "AgentConfig"] | None = None,
+        agent_configs: dict | None = None,
         render_mode: Optional[str] = None,
         seed: int = 0,
     ):
@@ -232,9 +220,3 @@ class GridNegotiationEnv:
         peer_comm = self.comm_buffer[other].copy()
         return {"grid": grid, "comm": peer_comm}
 
-    def set_comm(self, agent: str, msg: np.ndarray):
-        self.comm_buffer[agent] = np.clip(msg, 0.0, 1.0).astype(np.float32)
-
-    def switch_to_navigation(self, poi_idx: int):
-        self.phase = "navigation"
-        self.agreed_poi = poi_idx

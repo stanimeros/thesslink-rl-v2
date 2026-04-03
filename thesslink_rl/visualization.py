@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import matplotlib.colors as mcolors
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation
 
-from .environment import GRID_SIZE, NUM_POIS, ACT_SUGGEST_BASE, GridNegotiationEnv
+from .environment import GRID_SIZE, NUM_POIS, GridNegotiationEnv
 from .evaluation import (
     AgentConfig,
     compute_eval_heatmap,
