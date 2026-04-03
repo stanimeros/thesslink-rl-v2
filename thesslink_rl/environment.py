@@ -1,8 +1,13 @@
 """Core grid environment: 10x10 grid with obstacles, POIs, and two-phase episodes.
 
 Two phases per episode, both controlled by RL:
-  1. Negotiation -- agents suggest POIs and agree on a target.
+  1. Negotiation -- agents take turns suggesting/accepting POIs.
   2. Navigation  -- agents move to reach the agreed POI.
+
+Negotiation is turn-based: one agent has priority each step. The active
+agent can *suggest* a POI or *accept* the peer's last suggestion (if any).
+The other agent is passive (forced no-op) until it becomes their turn.
+Agreement happens when the active agent accepts the peer's proposal.
 """
 
 from __future__ import annotations
@@ -15,15 +20,16 @@ GRID_SIZE = 10
 NUM_OBSTACLES = 10
 NUM_POIS = 3
 NUM_AGENTS = 2
-MAX_EPISODE_STEPS = 60
+MAX_EPISODE_STEPS = 100
 
 NUM_MOVE_ACTIONS = 5
 
-# Negotiation actions
+# Negotiation actions: suggest POI 0/1/2, or accept the peer's last suggestion
 ACT_SUGGEST_BASE = 5  # 5 = suggest POI 0, 6 = suggest POI 1, 7 = suggest POI 2
 NUM_SUGGEST_ACTIONS = NUM_POIS
+ACT_ACCEPT = ACT_SUGGEST_BASE + NUM_SUGGEST_ACTIONS  # 8
 
-ACTION_DIM = NUM_MOVE_ACTIONS + NUM_SUGGEST_ACTIONS  # 8
+ACTION_DIM = NUM_MOVE_ACTIONS + NUM_SUGGEST_ACTIONS + 1  # 9 (5 move + 3 suggest + 1 accept)
 
 # Grid channel indices (C, H, W) with C=3
 CH_OBSTACLE = 0
@@ -32,23 +38,26 @@ CH_SELF = 2
 NUM_CHANNELS = 3
 
 # Negotiation obs components
-PEER_ACTION_DIM = NUM_SUGGEST_ACTIONS + 1  # 4: [suggest_0, suggest_1, suggest_2, no_action]
+# peer_action one-hot: [suggest_0, suggest_1, suggest_2, accept, no_action]
+PEER_ACTION_DIM = NUM_SUGGEST_ACTIONS + 2  # 5
+MY_TURN_DIM = 1  # 1 if it's this agent's turn, 0 otherwise
 
 # Unified observation layout (always the same in both phases):
-#   [phase_flag(1), poi_scores(3), peer_action(4), agreed_poi_onehot(3), grid(3*10*10)]
+#   [phase_flag(1), my_turn(1), poi_scores(3), peer_action(5), agreed_poi_onehot(3), grid(3*10*10)]
 PHASE_DIM = 1
-NEG_INFO_DIM = NUM_POIS + PEER_ACTION_DIM  # 7
-AGREED_POI_DIM = NUM_POIS                  # 3
-GRID_FLAT_DIM = NUM_CHANNELS * GRID_SIZE * GRID_SIZE  # 300
-OBS_FLAT_SIZE = PHASE_DIM + NEG_INFO_DIM + AGREED_POI_DIM + GRID_FLAT_DIM  # 311
+NEG_INFO_DIM = MY_TURN_DIM + NUM_POIS + PEER_ACTION_DIM  # 9
+AGREED_POI_DIM = NUM_POIS                                 # 3
+GRID_FLAT_DIM = NUM_CHANNELS * GRID_SIZE * GRID_SIZE       # 300
+OBS_FLAT_SIZE = PHASE_DIM + NEG_INFO_DIM + AGREED_POI_DIM + GRID_FLAT_DIM  # 313
 
 
 class GridNegotiationEnv:
     """Two agents negotiate over POIs then navigate to the agreed one.
 
-    Both phases are RL-controlled. During negotiation, agents choose
-    suggest actions (5-7) to propose a POI. When both suggest the same
-    POI on the same step, they agree and switch to navigation.
+    Negotiation is turn-based. A random agent starts. The active agent
+    can *suggest* a POI or *accept* the peer's last suggestion. The
+    passive agent is forced to no-op. Turns alternate each step.
+    Agreement happens when the active agent plays *accept*.
     """
 
     metadata = {"name": "grid_negotiation_v0", "render_modes": ["human"]}
@@ -73,6 +82,7 @@ class GridNegotiationEnv:
         self.last_suggestion: Dict[str, int] = {}
         self.phase = "negotiation"
         self.agreed_poi: Optional[int] = None
+        self.neg_turn: Optional[str] = None  # which agent acts this step
 
     def reset(self, seed=None, options=None) -> tuple[Dict, Dict]:
         if seed is not None:
@@ -91,35 +101,41 @@ class GridNegotiationEnv:
         self.last_suggestion = {}
         self.poi_scores = {}
 
+        first = int(self._rng.randint(0, NUM_AGENTS))
+        self.neg_turn = self.possible_agents[first]
+
         obs = {a: self._get_obs(a) for a in self.agents}
         info = {a: {} for a in self.agents}
         return obs, info
 
+    def _peer(self, agent: str) -> str:
+        return [a for a in self.possible_agents if a != agent][0]
+
     def step(self, actions: Dict[str, int]):
         self.timestep += 1
 
-        obs: Dict[str, Dict[str, np.ndarray]]
         rewards = {a: 0.0 for a in self.agents}
         terminated = {a: False for a in self.agents}
         truncated = {a: self.timestep >= MAX_EPISODE_STEPS for a in self.agents}
         infos: Dict[str, dict] = {a: {"phase": self.phase} for a in self.agents}
 
         if self.phase == "negotiation":
-            suggestions: Dict[str, int] = {}
-            for agent, act in actions.items():
-                if ACT_SUGGEST_BASE <= act < ACT_SUGGEST_BASE + NUM_SUGGEST_ACTIONS:
-                    poi_idx = act - ACT_SUGGEST_BASE
-                    suggestions[agent] = poi_idx
-                    self.last_suggestion[agent] = poi_idx
+            active = self.neg_turn
+            assert active is not None
+            act = actions.get(active, 0)
+            peer = self._peer(active)
 
-            if len(suggestions) == NUM_AGENTS:
-                values = list(suggestions.values())
-                if values[0] == values[1]:
-                    self.agreed_poi = values[0]
-                    self.phase = "navigation"
-                    for a in self.agents:
-                        infos[a]["agreed_poi"] = self.agreed_poi
-                        infos[a]["phase"] = "navigation"
+            if act == ACT_ACCEPT and peer in self.last_suggestion:
+                self.agreed_poi = self.last_suggestion[peer]
+                self.phase = "navigation"
+                self.neg_turn = None
+                for a in self.agents:
+                    infos[a]["agreed_poi"] = self.agreed_poi
+                    infos[a]["phase"] = "navigation"
+            elif ACT_SUGGEST_BASE <= act < ACT_SUGGEST_BASE + NUM_SUGGEST_ACTIONS:
+                poi_idx = act - ACT_SUGGEST_BASE
+                self.last_suggestion[active] = poi_idx
+                self.neg_turn = peer
 
         elif self.phase == "navigation":
             for agent, act in actions.items():
@@ -150,8 +166,14 @@ class GridNegotiationEnv:
         """Return a binary mask of length ACTION_DIM for valid actions."""
         mask = [0] * ACTION_DIM
         if self.phase == "negotiation":
-            for i in range(NUM_SUGGEST_ACTIONS):
-                mask[ACT_SUGGEST_BASE + i] = 1
+            if agent == self.neg_turn:
+                for i in range(NUM_SUGGEST_ACTIONS):
+                    mask[ACT_SUGGEST_BASE + i] = 1
+                peer = self._peer(agent)
+                if peer in self.last_suggestion:
+                    mask[ACT_ACCEPT] = 1
+            else:
+                mask[0] = 1  # passive agent: no-op (stay)
         else:
             for i in range(NUM_MOVE_ACTIONS):
                 mask[i] = 1
@@ -188,29 +210,29 @@ class GridNegotiationEnv:
             self.agent_positions[agent] = [nr, nc]
 
     def _get_obs(self, agent: str) -> Dict[str, np.ndarray]:
-        """Unified observation: phase flag + negotiation info + agreed POI + grid."""
-        # Phase flag
+        """Unified observation: phase flag + turn + negotiation info + agreed POI + grid."""
         phase_flag = np.array(
             [1.0 if self.phase == "navigation" else 0.0], dtype=np.float32,
         )
 
-        # Negotiation info (always present so the network layout is stable)
+        my_turn = np.array(
+            [1.0 if self.neg_turn == agent else 0.0], dtype=np.float32,
+        )
+
         own_scores = self.poi_scores.get(
             agent, np.zeros(NUM_POIS, dtype=np.float32),
         )
-        peer = [a for a in self.possible_agents if a != agent][0]
+        peer = self._peer(agent)
         peer_action_onehot = np.zeros(PEER_ACTION_DIM, dtype=np.float32)
         if peer in self.last_suggestion:
             peer_action_onehot[self.last_suggestion[peer]] = 1.0
         else:
-            peer_action_onehot[-1] = 1.0
+            peer_action_onehot[-1] = 1.0  # no_action slot
 
-        # Agreed POI one-hot (zeros until agreement)
         agreed_onehot = np.zeros(NUM_POIS, dtype=np.float32)
         if self.agreed_poi is not None:
             agreed_onehot[self.agreed_poi] = 1.0
 
-        # Grid channels: obstacles, POIs, self position
         grid = np.zeros((NUM_CHANNELS, GRID_SIZE, GRID_SIZE), dtype=np.float32)
         grid[CH_OBSTACLE] = self.obstacle_map.astype(np.float32)
         for pr, pc in self.poi_positions:
@@ -220,6 +242,7 @@ class GridNegotiationEnv:
 
         return {
             "phase": phase_flag,
+            "my_turn": my_turn,
             "scores": own_scores.copy(),
             "peer_action": peer_action_onehot,
             "agreed_poi": agreed_onehot,

@@ -109,11 +109,15 @@ def render_grid(
 
     phase_tag = f"  [{env.phase}]" if hasattr(env, "phase") else ""
     neg_info = ""
-    if env.phase == "negotiation" and env.last_suggestion:
+    if env.phase == "negotiation":
         parts = []
         for a, poi in env.last_suggestion.items():
             parts.append(f"{a[-1]}->P{poi}")
-        neg_info = f"  ({', '.join(parts)})"
+        turn_str = ""
+        if hasattr(env, "neg_turn") and env.neg_turn is not None:
+            turn_str = f"turn:{env.neg_turn[-1]}"
+        if parts or turn_str:
+            neg_info = f"  ({', '.join(parts + ([turn_str] if turn_str else []))})"
 
     ax.set_title(title + phase_tag + neg_info, fontsize=11)
 
@@ -362,6 +366,7 @@ def replay_episode(
         env.phase = frame["phase"]
         env.agreed_poi = frame.get("agreed_poi")
         env.last_suggestion = frame.get("last_suggestion", {})
+        env.neg_turn = frame.get("neg_turn")
 
         ax_mid.clear()
         render_grid(env, title=f"Step {frame['timestep']}", ax=ax_mid, show=False)
@@ -409,4 +414,5 @@ def capture_frame(env: GridNegotiationEnv) -> dict:
         "timestep": env.timestep,
         "agreed_poi": getattr(env, "agreed_poi", None),
         "last_suggestion": dict(getattr(env, "last_suggestion", {})),
+        "neg_turn": getattr(env, "neg_turn", None),
     }

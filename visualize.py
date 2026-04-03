@@ -27,7 +27,7 @@ import numpy as np
 
 PROJECT = Path(__file__).resolve().parent
 PLOTS_DIR = PROJECT / "plots"
-SEED = 42
+SEED = 43
 
 ALGO_COLORS = {
     "iql": "#e74c3c",
@@ -237,13 +237,18 @@ def main():
     runs = discover_runs(results_dir)
 
     if not runs:
-        print("No results found.")
+        print("No training results found. Generating random episode replay & heatmaps...")
+        algos = args.algo or ["random"]
+        generate_heatmaps_and_replays(algos)
+        print("Done! Plots saved to plots/")
         return
 
     if args.algo:
         runs = {k: v for k, v in runs.items() if k in args.algo}
         if not runs:
-            print(f"No results for: {args.algo}")
+            print(f"No results for: {args.algo}. Generating random episode replay & heatmaps...")
+            generate_heatmaps_and_replays(args.algo)
+            print("Done! Plots saved to plots/")
             return
 
     algos = list(runs.keys())

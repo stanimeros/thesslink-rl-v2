@@ -87,6 +87,7 @@ class GridNegotiationGymEnv(gym.Env):
         """Concatenate the unified obs dict into a flat vector of size OBS_FLAT_SIZE."""
         return np.concatenate([
             obs_dict["phase"],
+            obs_dict["my_turn"],
             obs_dict["scores"],
             obs_dict["peer_action"],
             obs_dict["agreed_poi"],
@@ -146,17 +147,14 @@ class GridNegotiationGymEnv(gym.Env):
         )
         if just_agreed:
             self._agreed_poi = self._env.agreed_poi
-            # Negotiation reward: golden mean for the chosen POI
             sa = self._poi_scores[agents[0]][self._agreed_poi]
             sb = self._poi_scores[agents[1]][self._agreed_poi]
             gm = golden_mean_reward(float(sa), float(sb))
-            rewards = [gm] * self.n_agents
-            # Initialise distance tracking for nav shaping
+            rewards = [gm * 5.0] * self.n_agents
             for a in agents:
                 self._prev_dist[a] = self._bfs_dist_to_target(a)
 
         if self._agreed_poi is not None and not just_agreed:
-            # Navigation shaping: reward getting closer, penalise moving away
             target = self._env.poi_positions[self._agreed_poi]
             reached = False
             for i, a in enumerate(agents):
@@ -165,15 +163,14 @@ class GridNegotiationGymEnv(gym.Env):
                     reached = True
                 new_dist = self._bfs_dist_to_target(a)
                 old_dist = self._prev_dist.get(a, new_dist)
-                rewards[i] += (old_dist - new_dist) * 0.01
+                rewards[i] += (old_dist - new_dist) * 0.05
                 self._prev_dist[a] = new_dist
 
-            # Terminal reward when any agent reaches the POI
             if reached:
                 sa = self._poi_scores[agents[0]][self._agreed_poi]
                 sb = self._poi_scores[agents[1]][self._agreed_poi]
                 gm = golden_mean_reward(float(sa), float(sb))
-                rewards = [gm] * self.n_agents
+                rewards = [gm * 10.0] * self.n_agents
 
         done = all(terminated_d[a] for a in agents)
         truncated = all(truncated_d[a] for a in agents)
