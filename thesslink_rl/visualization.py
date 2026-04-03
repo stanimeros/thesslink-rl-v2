@@ -24,13 +24,14 @@ from .evaluation import (
 COLORS = {
     "empty": "#f0f0f0",
     "obstacle": "#2d2d2d",
-    "poi_0": "#e74c3c",
-    "poi_1": "#2ecc71",
-    "poi_2": "#3498db",
+    "poi_0": "#2ecc71",   # green  (best)
+    "poi_1": "#3498db",   # blue   (mid)
+    "poi_2": "#e74c3c",   # red    (worst)
     "agent_0": "#f39c12",
     "agent_1": "#9b59b6",
-    "target": "#e74c3c",
 }
+
+AGENT_LABELS = {"agent_0": "A", "agent_1": "B"}
 
 OUT_DIR = Path("plots")
 
@@ -96,7 +97,8 @@ def render_grid(
         color = COLORS[agent]
         ax.scatter(c + 0.5, r + 0.5, marker="o", s=260,
                    c=color, edgecolors="white", linewidths=2, zorder=5)
-        ax.text(c + 0.5, r + 0.5, agent[-1], ha="center", va="center",
+        ax.text(c + 0.5, r + 0.5, AGENT_LABELS.get(agent, agent[-1]),
+                ha="center", va="center",
                 fontsize=9, fontweight="bold", color="white", zorder=6)
 
     ax.set_xticks(range(GRID_SIZE + 1))
@@ -112,10 +114,10 @@ def render_grid(
     if env.phase == "negotiation":
         parts = []
         for a, poi in env.last_suggestion.items():
-            parts.append(f"{a[-1]}->P{poi}")
+            parts.append(f"{AGENT_LABELS.get(a, a[-1])}->P{poi}")
         turn_str = ""
         if hasattr(env, "neg_turn") and env.neg_turn is not None:
-            turn_str = f"turn:{env.neg_turn[-1]}"
+            turn_str = f"turn:{AGENT_LABELS.get(env.neg_turn, env.neg_turn[-1])}"
         if parts or turn_str:
             neg_info = f"  ({', '.join(parts + ([turn_str] if turn_str else []))})"
 
@@ -185,7 +187,8 @@ def _draw_heatmap_panel(
 
     ax.scatter(pc + 0.5, pr + 0.5, marker="o", s=260,
                c=COLORS[agent], edgecolors="white", linewidths=2, zorder=7)
-    ax.text(pc + 0.5, pr + 0.5, agent[-1], ha="center", va="center",
+    ax.text(pc + 0.5, pr + 0.5, AGENT_LABELS.get(agent, agent[-1]),
+            ha="center", va="center",
             fontsize=9, fontweight="bold", color="white", zorder=8)
 
     ax.set_xticks(range(GRID_SIZE + 1))
@@ -229,10 +232,11 @@ def render_eval_heatmaps(
         scores = compute_poi_scores(
             spawn, spawn, env.poi_positions, env.obstacle_map, cfg,
         )
+        label = AGENT_LABELS.get(agent, agent[-1])
         _draw_heatmap_panel(
             ax, heatmap, env, agent, cfg, spawn,
             poi_scores=scores,
-            subtitle=f"{cfg.name} ({agent})\np={cfg.privacy_emphasis}  energy={cfg.energy_model}",
+            subtitle=f"{cfg.name} (Agent {label})\np={cfg.privacy_emphasis}  energy={cfg.energy_model}",
         )
 
     plt.tight_layout()

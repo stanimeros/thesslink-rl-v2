@@ -18,12 +18,21 @@ import argparse
 import json
 from pathlib import Path
 
-from thesslink_rl.visualization import rolling_mean_expanding
-
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from thesslink_rl.environment import GridNegotiationEnv
+from thesslink_rl.evaluation import AgentConfig, compute_poi_scores
+from thesslink_rl.visualization import (
+    _make_filename,
+    capture_frame,
+    plot_training_curves,
+    render_eval_heatmaps,
+    replay_episode,
+    rolling_mean_expanding,
+)
 
 PROJECT = Path(__file__).resolve().parent
 PLOTS_DIR = PROJECT / "plots"
@@ -109,8 +118,6 @@ def plot_comparison_curves(
 
 def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
     """Plot individual training curves per algorithm."""
-    from thesslink_rl.visualization import _make_filename
-
     for algo, metrics in runs.items():
         steps = metrics.get("test_return_mean", {}).get("steps", [])
         gm = metrics.get("test_return_mean", {}).get("values", [])
@@ -125,7 +132,6 @@ def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
             "ep_len": epl,
         }
 
-        from thesslink_rl.visualization import plot_training_curves
         w = min(window, max(1, len(gm)))
         plot_training_curves(
             stats, window=w,
@@ -138,15 +144,6 @@ def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
 
 def generate_heatmaps_and_replays(algos: list[str]):
     """Generate eval heatmaps and episode replay GIFs on the same seed."""
-    from thesslink_rl.environment import GridNegotiationEnv
-    from thesslink_rl.evaluation import AgentConfig, compute_poi_scores
-    from thesslink_rl.visualization import (
-        _make_filename,
-        capture_frame,
-        render_eval_heatmaps,
-        replay_episode,
-    )
-
     models_dir = PROJECT / "thesslink_rl" / "models"
     cfg_0 = AgentConfig.from_yaml(str(models_dir / "human.yaml"))
     cfg_1 = AgentConfig.from_yaml(str(models_dir / "taxi.yaml"))

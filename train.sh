@@ -33,14 +33,15 @@ kill_training() {
 show_status() {
     export LC_NUMERIC=C
     echo ""
-    echo " ALG  |   T_ENV |   RETURN | REACH% | EP_LEN"
-    echo "------|---------|----------|--------|-------"
+    echo " ALG  |   T_ENV |   RETURN |   NEG% | REACH% | EP_LEN"
+    echo "------|---------|----------|--------|--------|-------"
     for alg in "${ALL_ALGOS[@]}"; do
         local logf="$LOGS_DIR/${alg}.log"
         [ -f "$logf" ] || continue
-        local tenv ret reach eplen n r_perc
+        local tenv ret neg reach eplen n n_perc r_perc
         tenv=$(grep -a 't_env:' "$logf" 2>/dev/null | tail -n1 | awk -F't_env: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         ret=$(grep -a 'test_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        neg=$(grep -a 'test_negotiation_agreed_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_negotiation_agreed_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         reach=$(grep -a 'test_battle_won_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_battle_won_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         eplen=$(grep -a 'test_ep_length_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_ep_length_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         case $alg in
@@ -51,9 +52,10 @@ show_status() {
             coma)  n="COMA ";;
             *)     n="$alg";;
         esac
+        n_perc=$(echo "${neg:-0} * 100" | bc -l 2>/dev/null || echo "0")
         r_perc=$(echo "${reach:-0} * 100" | bc -l 2>/dev/null || echo "0")
-        printf " %5s | %7s | %8.4f | %5.1f%% | %5.1f\n" \
-            "$n" "${tenv:-0}" "${ret:-0}" "$r_perc" "${eplen:-0}"
+        printf " %5s | %7s | %8.4f | %5.1f%% | %5.1f%% | %5.1f\n" \
+            "$n" "${tenv:-0}" "${ret:-0}" "$n_perc" "$r_perc" "${eplen:-0}"
     done
     echo ""
 }
