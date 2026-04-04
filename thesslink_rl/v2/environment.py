@@ -1,4 +1,4 @@
-"""Core grid environment v1: symbolic observations with GPS signal.
+"""Core grid environment v2: symbolic observations with GPS signal.
 
 Observation vector (size 19):
   phase_flag    (1)  0.0 = Negotiation, 1.0 = Navigation

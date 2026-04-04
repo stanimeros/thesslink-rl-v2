@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 from config import ENV_CONFIG, ENV_TAG, ENV_VERSION, GridNegotiationEnv
+from thesslink_rl.visualization import _make_filename
 
 PROJECT = Path(__file__).resolve().parent
 EPYMARL_SRC = PROJECT / "epymarl" / "src"
@@ -26,6 +27,29 @@ PLOTS_DIR = PROJECT / "plots"
 T_MAX = 4_000
 TEST_INTERVAL = 1_000
 SAVE_MODEL_INTERVAL = 1_000
+
+SACRED_VERSION_MARKER = f"GridNegotiation-v{ENV_VERSION}"
+
+
+def _latest_sacred_run_for_smoke() -> Path:
+    """Sacred run for this smoke test: QMIX + current env version, newest mtime."""
+    sacred_base = RESULTS_DIR / "sacred"
+    candidates = [
+        p for p in sacred_base.rglob("metrics.json")
+        if SACRED_VERSION_MARKER in str(p) and "qmix" in p.parts
+    ]
+    if not candidates:
+        candidates = [
+            p for p in sacred_base.rglob("metrics.json")
+            if SACRED_VERSION_MARKER in str(p)
+        ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No Sacred metrics under {sacred_base} matching {SACRED_VERSION_MARKER!r}",
+        )
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    return latest.parent
+
 
 def run_training() -> Path:
     """Launch a quick QMIX training and return the Sacred run directory."""
@@ -53,12 +77,11 @@ def run_training() -> Path:
         print(f"Training failed with exit code {proc.returncode}")
         sys.exit(1)
 
-    sacred_base = RESULTS_DIR / "sacred"
-    run_dirs = sorted(sacred_base.rglob("metrics.json"))
-    if not run_dirs:
-        print("No Sacred results found!")
+    try:
+        run_dir = _latest_sacred_run_for_smoke()
+    except FileNotFoundError as e:
+        print(f"No Sacred results found: {e}")
         sys.exit(1)
-    run_dir = run_dirs[-1].parent
     print(f"\nSacred results at: {run_dir}")
     return run_dir
 
@@ -108,7 +131,6 @@ def generate_plots(metrics: dict, algo: str = "qmix"):
     import numpy as np
     from thesslink_rl.evaluation import AgentConfig, compute_poi_scores
     from thesslink_rl.visualization import (
-        _make_filename,
         capture_frame,
         describe_actions,
         plot_training_curves,
@@ -208,9 +230,9 @@ def generate_plots(metrics: dict, algo: str = "qmix"):
 
 
 def main():
-    print("ThessLink RL v2 -- Smoke Test")
+    print("ThessLink RL — Smoke Test")
     print(f"Project: {PROJECT}")
-    print(f"Environment version: v{ENV_VERSION}")
+    print(f"Environment version: v{ENV_VERSION} (env-config={ENV_CONFIG})")
 
     run_dir = run_training()
     metrics = load_sacred_metrics(run_dir)
@@ -218,7 +240,6 @@ def main():
     generate_plots(metrics)
 
     algo = "qmix"
-    from thesslink_rl.visualization import _make_filename
     env_plots = PLOTS_DIR / ENV_TAG
     print(f"\n{'='*60}")
     print("SMOKE TEST COMPLETE")
@@ -229,11 +250,23 @@ def main():
     print(f"  - {_make_filename('eval_heatmaps', 'png', algo)}")
     print(f"  - {_make_filename('episode_replay', 'gif', algo)}")
 
-    sacred_base = RESULTS_DIR / "sacred"
-    model_dirs = sorted((RESULTS_DIR / "models").rglob("*.th")) if (RESULTS_DIR / "models").exists() else []
-    if model_dirs:
-        checkpoint = model_dirs[-1].parent
-        print(f"\nBest checkpoint: {checkpoint}")
+    models_root = RESULTS_DIR / "models"
+    if models_root.exists():
+        th_files = [
+            p for p in models_root.rglob("*.th")
+            if SACRED_VERSION_MARKER in str(p) and "/qmix_" in str(p).replace("\\", "/")
+        ]
+        if not th_files:
+            th_files = [
+                p for p in models_root.rglob("*.th")
+                if SACRED_VERSION_MARKER in str(p)
+            ]
+        if th_files:
+            latest_th = max(th_files, key=lambda p: p.stat().st_mtime)
+            print(
+                f"\nLatest checkpoint (smoke, {SACRED_VERSION_MARKER}): "
+                f"{latest_th.parent}",
+            )
     print()
 
 

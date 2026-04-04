@@ -54,9 +54,8 @@ _SHAPING_GAMMA = 0.99
 _MAX_BFS_DIST = float(GRID_SIZE * GRID_SIZE)
 
 
-def _potential(agent_pos: tuple[int, int], target: tuple[int, int],
-               bfs_grid: np.ndarray) -> float:
-    """Phi(s) = -d(agent, target) / max_dist.  Higher (less negative) is better."""
+def _potential(agent_pos: tuple[int, int], bfs_grid: np.ndarray) -> float:
+    """Phi(s) = -BFS distance from agent to target POI / max_dist."""
     d = bfs_grid[agent_pos[0], agent_pos[1]]
     if np.isinf(d):
         return -1.0
@@ -203,11 +202,10 @@ class GridNegotiationGymEnv(gym.Env):
                 self._target_bfs = bfs_distances(target, self._env.obstacle_map)
                 for a in agents:
                     pos = tuple(self._env.agent_positions[a])
-                    self._prev_potentials[a] = _potential(pos, target, self._target_bfs)
+                    self._prev_potentials[a] = _potential(pos, self._target_bfs)
 
         # ── Navigation phase rewards ─────────────────────────────────────
         if prev_phase == "navigation" and self._agreed_poi is not None and self._target_bfs is not None:
-            target = self._env.poi_positions[self._agreed_poi]
             quality = negotiation_quality(
                 self._agreed_poi, self._poi_scores, agents,
             )
@@ -217,7 +215,7 @@ class GridNegotiationGymEnv(gym.Env):
                     continue
 
                 cur_pos = tuple(self._env.agent_positions[a])
-                cur_phi = _potential(cur_pos, target, self._target_bfs)
+                cur_phi = _potential(cur_pos, self._target_bfs)
                 prev_phi = self._prev_potentials.get(a, cur_phi)
 
                 rewards[i] += _SHAPING_GAMMA * cur_phi - prev_phi

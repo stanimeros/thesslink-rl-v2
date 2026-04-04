@@ -187,11 +187,6 @@ def compute_eval_heatmap(
     return np.clip(heatmap, 0.0, 1.0)
 
 
-def golden_mean(score_a: float, score_b: float) -> float:
-    """Golden Mean: product of both agents' scores for a POI."""
-    return score_a * score_b
-
-
 def golden_mean_vector(
     scores: dict[str, np.ndarray],
     agents: list[str],
