@@ -19,6 +19,15 @@ LOGS_DIR="$RESULTS_DIR/logs"
 EPYMARL_SRC="epymarl/src"
 VENV=".venv/bin/activate"
 
+# Read ENV_VERSION from config.py (single source of truth)
+ENV_VERSION=$(python3 -c "exec(open('config.py').read()); print(ENV_VERSION)")
+if [[ "$ENV_VERSION" == "1" ]]; then
+    ENV_CONFIG="thesslink_v1"
+else
+    ENV_CONFIG="thesslink"
+fi
+log "Environment version: v${ENV_VERSION} (env-config=${ENV_CONFIG})"
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 log()  { echo -e "\033[1;32m[train]\033[0m $*"; }
@@ -115,8 +124,9 @@ if [ ! -d "epymarl" ]; then
     pip install -e . --quiet
 fi
 
-log "Copying thesslink env config into EPyMARL..."
+log "Copying thesslink env configs into EPyMARL..."
 cp epymarl_config/thesslink.yaml "$EPYMARL_SRC/config/envs/thesslink.yaml"
+cp epymarl_config/thesslink_v1.yaml "$EPYMARL_SRC/config/envs/thesslink_v1.yaml"
 
 log "Applying patches to EPyMARL..."
 git -C epymarl checkout -- . 2>/dev/null || true
@@ -156,7 +166,7 @@ for alg in "${ALGOS[@]}"; do
     log "  Starting $alg -> $logfile"
     nohup python "$EPYMARL_SRC/main.py" \
         --config="$alg" \
-        --env-config=thesslink \
+        --env-config="$ENV_CONFIG" \
         with \
         local_results_path=epymarl/results \
         save_model=True \

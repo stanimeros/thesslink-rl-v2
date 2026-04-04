@@ -23,6 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from config import ENV_VERSION, ENV_TAG, GridNegotiationEnv
 from thesslink_rl.evaluation import AgentConfig, compute_poi_scores
 from thesslink_rl.visualization import (
     _env_out_dir,
@@ -34,15 +35,6 @@ from thesslink_rl.visualization import (
     replay_episode,
     rolling_mean_expanding,
 )
-
-
-def _load_env_module(version: int = 0):
-    """Return (GridNegotiationEnv, ENV_TAG) for the given env version."""
-    if version == 1:
-        from thesslink_rl.v1 import ENV_TAG, GridNegotiationEnv
-    else:
-        from thesslink_rl.v0 import ENV_TAG, GridNegotiationEnv
-    return GridNegotiationEnv, ENV_TAG
 
 PROJECT = Path(__file__).resolve().parent
 PLOTS_DIR = PROJECT / "plots"
@@ -81,7 +73,6 @@ def plot_comparison_curves(
     runs: dict[str, dict],
     window: int = 10,
     save_path: str | None = None,
-    env_tag: str = "grid_negotiation_v0",
 ):
     """Plot all algorithms on the same figure for comparison."""
     fig, axes = plt.subplots(1, 5, figsize=(27, 5))
@@ -123,14 +114,14 @@ def plot_comparison_curves(
     fig.suptitle("Algorithm Comparison -- ThessLink Grid Negotiation", fontsize=14, y=1.02)
     plt.tight_layout()
 
-    env_dir = _env_out_dir(env_tag)
+    env_dir = _env_out_dir(ENV_TAG)
     out = save_path or "training_curves-all.png"
     fig.savefig(env_dir / out, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  -> plots/{env_tag}/{out}")
+    print(f"  -> plots/{ENV_TAG}/{out}")
 
 
-def plot_per_algo_curves(runs: dict[str, dict], window: int = 10, env_tag: str = "grid_negotiation_v0"):
+def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
     """Plot individual training curves per algorithm."""
     for algo, metrics in runs.items():
         steps = metrics.get("test_return_mean", {}).get("steps", [])
@@ -152,17 +143,15 @@ def plot_per_algo_curves(runs: dict[str, dict], window: int = 10, env_tag: str =
         plot_training_curves(
             stats, window=w,
             save_path=True, show=False, algo=algo,
-            env_name=env_tag,
+            env_name=ENV_TAG,
             timesteps=steps if steps else None,
         )
         fname = _make_filename("training_curves", "png", algo)
-        print(f"  -> plots/{env_tag}/{fname}")
+        print(f"  -> plots/{ENV_TAG}/{fname}")
 
 
-def generate_heatmaps_and_replays(algos: list[str], env_version: int = 0):
+def generate_heatmaps_and_replays(algos: list[str]):
     """Generate eval heatmaps and episode replay GIFs on the same seed."""
-    GridNegotiationEnv, env_tag = _load_env_module(env_version)
-
     models_dir = PROJECT / "thesslink_rl" / "models"
     cfg_0 = AgentConfig.from_yaml(str(models_dir / "human.yaml"))
     cfg_1 = AgentConfig.from_yaml(str(models_dir / "taxi.yaml"))
@@ -184,8 +173,8 @@ def generate_heatmaps_and_replays(algos: list[str], env_version: int = 0):
         fname = _make_filename("eval_heatmaps", "png", algo)
         render_eval_heatmaps(env, agent_configs,
                              save_path=True, show=False, algo=algo,
-                             env_name=env_tag)
-        print(f"  -> plots/{env_tag}/{fname}")
+                             env_name=ENV_TAG)
+        print(f"  -> plots/{ENV_TAG}/{fname}")
 
         env.reset(seed=SEED)
         for agent in agents:
@@ -216,8 +205,8 @@ def generate_heatmaps_and_replays(algos: list[str], env_version: int = 0):
         fname = _make_filename("episode_replay", "gif", algo)
         replay_episode(frames, env, agent_configs=agent_configs,
                        save_path=True, show=False, algo=algo,
-                       env_name=env_tag)
-        print(f"  -> plots/{env_tag}/{fname}")
+                       env_name=ENV_TAG)
+        print(f"  -> plots/{ENV_TAG}/{fname}")
 
 
 def print_summary(runs: dict[str, dict]):
@@ -259,11 +248,9 @@ def main():
                         help="Path to results directory")
     parser.add_argument("--window", type=int, default=10,
                         help="Smoothing window for curves")
-    parser.add_argument("--env-version", type=int, default=0, choices=[0, 1],
-                        help="Environment version: 0 (grid obs) or 1 (symbolic obs)")
     args = parser.parse_args()
 
-    _, env_tag = _load_env_module(args.env_version)
+    print(f"Using environment: {ENV_TAG} (ENV_VERSION={ENV_VERSION})")
 
     results_dir = Path(args.results)
     runs = discover_runs(results_dir)
@@ -271,16 +258,16 @@ def main():
     if not runs:
         print("No training results found. Generating random episode replay & heatmaps...")
         algos = args.algo or ["random"]
-        generate_heatmaps_and_replays(algos, env_version=args.env_version)
-        print(f"Done! Plots saved to plots/{env_tag}/")
+        generate_heatmaps_and_replays(algos)
+        print(f"Done! Plots saved to plots/{ENV_TAG}/")
         return
 
     if args.algo:
         runs = {k: v for k, v in runs.items() if k in args.algo}
         if not runs:
             print(f"No results for: {args.algo}. Generating random episode replay & heatmaps...")
-            generate_heatmaps_and_replays(args.algo, env_version=args.env_version)
-            print(f"Done! Plots saved to plots/{env_tag}/")
+            generate_heatmaps_and_replays(args.algo)
+            print(f"Done! Plots saved to plots/{ENV_TAG}/")
             return
 
     algos = list(runs.keys())
@@ -289,15 +276,15 @@ def main():
     print_summary(runs)
 
     print("[1/3] Comparison training curves...")
-    plot_comparison_curves(runs, window=args.window, env_tag=env_tag)
+    plot_comparison_curves(runs, window=args.window)
 
     print("[2/3] Per-algorithm training curves...")
-    plot_per_algo_curves(runs, window=args.window, env_tag=env_tag)
+    plot_per_algo_curves(runs, window=args.window)
 
     print("[3/3] Eval heatmaps & episode replays...")
-    generate_heatmaps_and_replays(algos, env_version=args.env_version)
+    generate_heatmaps_and_replays(algos)
 
-    print(f"Done! All plots saved to plots/{env_tag}/")
+    print(f"Done! All plots saved to plots/{ENV_TAG}/")
 
 
 if __name__ == "__main__":
