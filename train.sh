@@ -161,13 +161,21 @@ mkdir -p "$LOGS_DIR"
 
 # ── Launch training ──────────────────────────────────────────────────────
 
+algo_extra_args() {
+    case "$1" in
+        iql|mappo) echo "common_reward=False" ;;
+        *)         echo "" ;;
+    esac
+}
+
 log "Launching ${#ALGOS[@]} algorithm(s): ${ALGOS[*]}"
 echo ""
 
 PIDS=()
 for alg in "${ALGOS[@]}"; do
     logfile="$LOGS_DIR/${alg}.log"
-    log "  Starting $alg -> $logfile"
+    extra=$(algo_extra_args "$alg")
+    log "  Starting $alg -> $logfile ${extra:+(${extra})}"
     nohup python "$EPYMARL_SRC/main.py" \
         --config="$alg" \
         --env-config="$ENV_CONFIG" \
@@ -176,6 +184,7 @@ for alg in "${ALGOS[@]}"; do
         save_model=True \
         save_model_interval=50000 \
         t_max=2000000 \
+        $extra \
         > "$logfile" 2>&1 &
     PIDS+=($!)
 done
