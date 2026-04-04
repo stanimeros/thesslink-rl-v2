@@ -92,14 +92,6 @@ log "Pulling latest changes..."
 git fetch origin main
 git reset --hard origin/main
 
-# Read ENV_VERSION from config.py AFTER pulling latest code
-ENV_VERSION=$(grep -m1 '^ENV_VERSION' config.py | awk -F'=' '{print $2}' | tr -dc '0-9')
-case "$ENV_VERSION" in
-    2) ENV_CONFIG="thesslink_v2" ;;
-    1) ENV_CONFIG="thesslink_v1" ;;
-    *) ENV_CONFIG="thesslink" ;;
-esac
-
 log "Killing previous training processes..."
 kill_training
 
@@ -114,6 +106,16 @@ source "$VENV"
 
 log "Installing project requirements..."
 pip install -r requirements.txt --quiet
+
+# ENV_VERSION / ENV_CONFIG must match smoke_test.py and visualize.py.
+# Do NOT use `tr -dc '0-9'` on the config line — comment digits (e.g. "# 0 = ... 1 = ... 2 =")
+# concatenate into a wrong value like 20122 so case 2) never matches and you get thesslink (v0).
+eval "$(python3 <<'PY'
+import config
+print(f"export ENV_VERSION={config.ENV_VERSION}")
+print(f"export ENV_CONFIG={config.ENV_CONFIG!r}")
+PY
+)"
 
 log "Environment version: v${ENV_VERSION} (env-config=${ENV_CONFIG})"
 
