@@ -26,8 +26,6 @@ if [[ "$ENV_VERSION" == "1" ]]; then
 else
     ENV_CONFIG="thesslink"
 fi
-log "Environment version: v${ENV_VERSION} (env-config=${ENV_CONFIG})"
-
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 log()  { echo -e "\033[1;32m[train]\033[0m $*"; }
@@ -112,6 +110,11 @@ if [ ! -f "$VENV" ]; then
 fi
 log "Activating virtualenv..."
 source "$VENV"
+
+log "Installing project requirements..."
+pip install -r requirements.txt --quiet
+
+log "Environment version: v${ENV_VERSION} (env-config=${ENV_CONFIG})"
 
 # ── EPyMARL ──────────────────────────────────────────────────────────────
 
