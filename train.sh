@@ -14,7 +14,15 @@
 #
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Resolve repo root: dirname "$0" is wrong when invoked as `bash train.sh` from another
+# directory ($0 is just "train.sh", so `cd .` follows the caller's cwd, not this file).
+_script="${BASH_SOURCE[0]:-$0}"
+if [[ -L "$_script" ]] && command -v readlink >/dev/null; then
+    if _r="$(readlink -f "$_script" 2>/dev/null)"; then
+        _script="$_r"
+    fi
+fi
+SCRIPT_DIR="$(cd "$(dirname "$_script")" && pwd)"
 cd "$SCRIPT_DIR"
 
 ALL_ALGOS=(iql qmix vdn mappo coma)
@@ -69,7 +77,7 @@ show_status() {
         no_perc=$(echo "${neg_opt:-0} * 100" | bc -l 2>/dev/null || echo "0")
         r_perc=$(echo "${reach:-0} * 100" | bc -l 2>/dev/null || echo "0")
         printf " %5s | %7s | %8.4f | %5.1f%% | %5.1f%% | %5.1f%% | %5.1f\n" \
-            "$n" "${tenv:-0}" "${ret:-0}" "$n_perc" "$no_perc" "$r_perc" "${eplen:-0}"
+            "$n" "${tenv:-0}" "${ret:-0}" "${n_perc:-0}" "${no_perc:-0}" "${r_perc:-0}" "${eplen:-0}"
     done
     echo ""
 }
