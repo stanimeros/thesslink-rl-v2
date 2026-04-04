@@ -61,20 +61,38 @@ def _checkpoint_dirs_for_run(run_dir: Path) -> dict[int, Path]:
     return out
 
 
-def _algo_run_dirs(models_root: Path, algo: str, version_marker: str) -> list[Path]:
-    """Top-level ``models/<unique_token>/`` dirs for this algo + env version."""
+def _algo_run_dirs(models_root: Path, algo: str, env_version: int) -> list[Path]:
+    """Directories that directly contain ``<t_env>/*.th`` for this algo and env version.
+
+    EPyMARL saves under::
+
+      models/<name>_seed<k>_<env_key>/GridNegotiation-vN_<timestamp>/<t_env>/*.th
+
+    So the env version appears in a **nested** folder, not in the top-level name.
+    """
     if not models_root.is_dir():
         return []
     algo_p = algo.lower() + "_"
+    version_prefix = f"GridNegotiation-v{env_version}_"
     runs: list[Path] = []
     for child in models_root.iterdir():
         if not child.is_dir():
             continue
         if not child.name.lower().startswith(algo_p):
             continue
-        if version_marker not in str(child):
+        # Flat layout (unusual): version marker in the top-level folder name
+        if f"GridNegotiation-v{env_version}" in child.name:
+            runs.append(child)
             continue
-        runs.append(child)
+        # Normal layout: models/<algo>_.../GridNegotiation-vN_<datetime>/
+        try:
+            for sub in child.iterdir():
+                if not sub.is_dir():
+                    continue
+                if sub.name.startswith(version_prefix):
+                    runs.append(sub)
+        except OSError:
+            continue
     return runs
 
 
@@ -94,10 +112,9 @@ def find_best_checkpoint_timestep_dir(
     target_t = best_test_env_timestep(metrics)
     if target_t is None:
         return None
-    version_marker = f"GridNegotiation-v{env_version}"
     best_path: Path | None = None
     best_dist: float | None = None
-    for run_dir in _algo_run_dirs(root, algo, version_marker):
+    for run_dir in _algo_run_dirs(root, algo, env_version):
         for t, path in _checkpoint_dirs_for_run(run_dir).items():
             dist = float(abs(t - target_t))
             if best_dist is None or dist < best_dist:
@@ -134,6 +151,24 @@ def _recursive_dict_update(d: dict, u: dict) -> dict:
     return d
 
 
+def _resolve_env_config_yaml(project_root: Path, epymarl_src: Path, env_config_name: str) -> Path:
+    """Prefer EPyMARL's ``config/envs/``; fall back to this repo's ``epymarl_config/envs/``.
+
+    Training copies ThessLink YAMLs into ``epymarl``; users who only sync ``results/models``
+    still need rollout config — the bundled ``epymarl_config/envs/*.yaml`` matches them.
+    """
+    in_epymarl = epymarl_src / "config" / "envs" / f"{env_config_name}.yaml"
+    bundled = project_root / "epymarl_config" / "envs" / f"{env_config_name}.yaml"
+    if in_epymarl.is_file():
+        return in_epymarl
+    if bundled.is_file():
+        return bundled
+    raise FileNotFoundError(
+        f"Missing env config {env_config_name}.yaml — expected {in_epymarl} "
+        f"or {bundled}",
+    )
+
+
 def load_epymarl_config_for_algo(algo: str, env_config_name: str, seed: int) -> Any:
     """Load merged default + env + algorithm YAML into a ``SimpleNamespace`` (like EPyMARL)."""
     from types import SimpleNamespace
@@ -149,7 +184,8 @@ def load_epymarl_config_for_algo(algo: str, env_config_name: str, seed: int) -> 
     cfg_dir = epymarl_src / "config"
     with open(cfg_dir / "default.yaml") as f:
         config: dict = yaml.safe_load(f)
-    with open(cfg_dir / "envs" / f"{env_config_name}.yaml") as f:
+    env_yaml = _resolve_env_config_yaml(root, epymarl_src, env_config_name)
+    with open(env_yaml) as f:
         _recursive_dict_update(config, yaml.safe_load(f))
     with open(cfg_dir / "algs" / f"{algo}.yaml") as f:
         _recursive_dict_update(config, yaml.safe_load(f))

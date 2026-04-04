@@ -5,9 +5,9 @@ With **no** Sacred results (or no matching ``--algo``): writes **3** placeholder
 files only — ``training_curves-example.png``, ``eval_heatmaps-example.png``,
 ``episode_replay-example.gif``.
 
-With results: ``training_curves-all.png`` (comparison) plus **3 files per
-algorithm** — per-algo training curves, eval heatmaps, and episode GIF from the
-**best** saved checkpoint under ``results/models`` (random rollout only if
+With results: ``training_curves-all.png`` (comparison), **one** shared
+``eval_heatmaps.png``, plus per-algorithm training curves and episode GIFs from
+the **best** saved checkpoint under ``results/models`` (random rollout only if
 missing checkpoint or load fails).
 
 Usage:
@@ -317,7 +317,7 @@ def generate_heatmaps_and_replays(
     runs: dict[str, dict] | None = None,
     models_root: Path | None = None,
 ):
-    """Generate eval heatmaps and episode replay GIFs on the same seed.
+    """Generate one eval heatmap PNG and per-algorithm episode replay GIFs on the same seed.
 
     Episode GIFs are written **only** when a checkpoint can be loaded from
     *models_root* (default: *results_dir*/models). No random-policy GIFs.
@@ -329,25 +329,27 @@ def generate_heatmaps_and_replays(
 
     env = GridNegotiationEnv(agent_configs=agent_configs, seed=SEED)
 
+    env.reset(seed=SEED)
+    agents = env.possible_agents
+    for agent in agents:
+        spawn = tuple(env.spawn_positions[agent])
+        scores = compute_poi_scores(
+            spawn, spawn, env.poi_positions, env.obstacle_map,
+            agent_configs[agent],
+        )
+        env.poi_scores[agent] = scores
+
+    render_eval_heatmaps(
+        env, agent_configs,
+        save_path=True, show=False, algo=None,
+        env_name=ENV_TAG,
+    )
+    print(f"  -> plots/{ENV_TAG}/{_make_filename('eval_heatmaps', 'png', None)}")
+
     for raw_algo in algos:
         algo = raw_algo.lower()
         env.reset(seed=SEED)
         agents = env.possible_agents
-        for agent in agents:
-            spawn = tuple(env.spawn_positions[agent])
-            scores = compute_poi_scores(
-                spawn, spawn, env.poi_positions, env.obstacle_map,
-                agent_configs[agent],
-            )
-            env.poi_scores[agent] = scores
-
-        fname = _make_filename("eval_heatmaps", "png", algo)
-        render_eval_heatmaps(env, agent_configs,
-                             save_path=True, show=False, algo=algo,
-                             env_name=ENV_TAG)
-        print(f"  -> plots/{ENV_TAG}/{fname}")
-
-        env.reset(seed=SEED)
         for agent in agents:
             spawn = tuple(env.spawn_positions[agent])
             scores = compute_poi_scores(
@@ -376,6 +378,15 @@ def generate_heatmaps_and_replays(
                     print(
                         f"  episode replay ({algo}): policy from {ckpt.name} "
                         f"({ckpt.parent.name})",
+                    )
+                except FileNotFoundError as e:
+                    extra = getattr(e, "filename", None)
+                    if extra:
+                        extra = f" ({extra})"
+                    else:
+                        extra = ""
+                    print(
+                        f"  episode replay ({algo}): skipped — missing file{extra}: {e!r}",
                     )
                 except Exception as e:
                     print(
@@ -467,8 +478,9 @@ def main():
     models_root = Path(args.models) if args.models else None
     mr_display = models_root or (results_dir / "models")
     print(
-        "Each algorithm: training_curves-<alg>.png, eval_heatmaps-<alg>.png, "
-        f"episode_replay-<alg>.gif only if checkpoints exist under {mr_display}.",
+        "Output: training_curves-all.png, eval_heatmaps.png (one), "
+        "training_curves-<alg>.png per algorithm, "
+        f"episode_replay-<alg>.gif per algorithm when checkpoints exist under {mr_display}.",
     )
     print(
         "Plus training_curves-all.png comparing all selected algorithms.\n",
@@ -482,7 +494,7 @@ def main():
     print("[2/3] Per-algorithm training curves (one PNG per algo)...")
     plot_per_algo_curves(runs, window=args.window)
 
-    print("[3/3] Per-algorithm eval heatmaps + episode GIFs (best checkpoint)...")
+    print("[3/3] Eval heatmap (one) + per-algorithm episode GIFs (best checkpoint)...")
     generate_heatmaps_and_replays(
         algos,
         results_dir=results_dir,
