@@ -19,13 +19,6 @@ LOGS_DIR="$RESULTS_DIR/logs"
 EPYMARL_SRC="epymarl/src"
 VENV=".venv/bin/activate"
 
-# Read ENV_VERSION from config.py (single source of truth) without importing
-ENV_VERSION=$(grep -m1 '^ENV_VERSION' config.py | awk -F'=' '{print $2}' | tr -dc '0-9')
-case "$ENV_VERSION" in
-    2) ENV_CONFIG="thesslink_v2" ;;
-    1) ENV_CONFIG="thesslink_v1" ;;
-    *) ENV_CONFIG="thesslink" ;;
-esac
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 log()  { echo -e "\033[1;32m[train]\033[0m $*"; }
@@ -98,6 +91,14 @@ fi
 log "Pulling latest changes..."
 git fetch origin main
 git reset --hard origin/main
+
+# Read ENV_VERSION from config.py AFTER pulling latest code
+ENV_VERSION=$(grep -m1 '^ENV_VERSION' config.py | awk -F'=' '{print $2}' | tr -dc '0-9')
+case "$ENV_VERSION" in
+    2) ENV_CONFIG="thesslink_v2" ;;
+    1) ENV_CONFIG="thesslink_v1" ;;
+    *) ENV_CONFIG="thesslink" ;;
+esac
 
 log "Killing previous training processes..."
 kill_training
