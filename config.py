@@ -4,7 +4,7 @@ Change ENV_VERSION here and it will propagate everywhere:
   train.sh, visualize.py, smoke_test.py, visualization.py
 """
 
-ENV_VERSION = 0  # 0 = grid obs, 1 = symbolic obs, 2 = symbolic obs + reward shaping
+ENV_VERSION = 2  # 0 = grid obs, 1 = symbolic obs, 2 = symbolic obs + reward shaping
 
 # --- Derived (do not edit) ------------------------------------------------
 
