@@ -8,7 +8,7 @@
 #   ./train.sh --status          # live dashboard (watch -n 2; Ctrl+C to stop)
 #   ./train.sh --kill            # kill all running training processes
 #
-# Results layout (epymarl/results/): training_<alg>.log (nohup), sacred/, models/
+# Results layout (epymarl/results/): logs/<alg>.log (nohup), sacred/, models/
 # The tree is wiped before smoke and again after smoke so full training only
 # sees fresh Sacred/model paths for the active ENV_CONFIG YAML.
 #
@@ -27,6 +27,7 @@ cd "$SCRIPT_DIR"
 
 ALL_ALGOS=(iql qmix vdn mappo coma)
 RESULTS_DIR="epymarl/results"
+LOGS_DIR="$RESULTS_DIR/logs"
 EPYMARL_SRC="epymarl/src"
 VENV=".venv/bin/activate"
 
@@ -41,42 +42,42 @@ kill_training() {
     pkill -f "$EPYMARL_SRC/main.py" 2>/dev/null && log "Killed." || log "No processes found."
 }
 
-# EPyMARL + Sacred write under epymarl/results/{sacred,models}; nohup logs: epymarl/results/training_<alg>.log
+# EPyMARL + Sacred write under epymarl/results/{sacred,models}; nohup logs: epymarl/results/logs/<alg>.log
 prepare_results_tree() {
     local phase="$1"
     log "Resetting results tree ($phase)..."
     rm -rf "$RESULTS_DIR"
-    mkdir -p "$RESULTS_DIR/sacred" "$RESULTS_DIR/models"
+    mkdir -p "$LOGS_DIR" "$RESULTS_DIR/sacred" "$RESULTS_DIR/models"
 }
 
 show_status() {
     export LC_NUMERIC=C
     echo ""
-    echo "ALG | T_ENV | RETURN | SUCC% | AGREE% | CONS% | EP_LEN"
-    echo "----|-------|--------|-------|--------|-------|------"
+    echo " ALG  |   T_ENV |   RETURN |   NEG% | OPT_N% | REACH% | EP_LEN"
+    echo "------|---------|----------|--------|--------|--------|-------"
     for alg in "${ALL_ALGOS[@]}"; do
-        local logf="$RESULTS_DIR/training_${alg}.log"
+        local logf="$LOGS_DIR/${alg}.log"
         [ -f "$logf" ] || continue
-        local tenv ret succ agr cons eplen n s_perc a_perc c_perc
+        local tenv ret neg neg_opt reach eplen n n_perc no_perc r_perc
         tenv=$(grep -a 't_env:' "$logf" 2>/dev/null | tail -n1 | awk -F't_env: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         ret=$(grep -a 'test_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
-        succ=$(grep -a 'test_grid_poi_success_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_grid_poi_success_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
-        agr=$(grep -a 'test_grid_poi_agreement_rate_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_grid_poi_agreement_rate_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
-        cons=$(grep -a 'test_grid_poi_consensus_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_grid_poi_consensus_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        neg=$(grep -a 'test_negotiation_agreed_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_negotiation_agreed_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        neg_opt=$(grep -a 'test_negotiation_optimal_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_negotiation_optimal_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        reach=$(grep -a 'test_reached_poi_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_reached_poi_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         eplen=$(grep -a 'test_ep_length_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_ep_length_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         case $alg in
-            iql)   n='IQL ';;
-            qmix)  n='QMIX';;
-            vdn)   n='VDN ';;
-            mappo) n='MAPPO';;
-            coma)  n='COMA';;
+            iql)   n="IQL  ";;
+            qmix)  n="QMIX ";;
+            vdn)   n="VDN  ";;
+            mappo) n="MAPPO";;
+            coma)  n="COMA ";;
             *)     n="$alg";;
         esac
-        s_perc=$(echo "${succ:-0} * 100" | bc -l 2>/dev/null || echo "0")
-        a_perc=$(echo "${agr:-0} * 100" | bc -l 2>/dev/null || echo "0")
-        c_perc=$(echo "${cons:-0} * 100" | bc -l 2>/dev/null || echo "0")
-        printf "%4s|%7s|%8.1f|%6.1f%%|%7.1f%%|%6.1f%%|%6.1f\n" \
-            "$n" "${tenv:-0}" "${ret:-0}" "${s_perc:-0}" "${a_perc:-0}" "${c_perc:-0}" "${eplen:-0}"
+        n_perc=$(echo "${neg:-0} * 100" | bc -l 2>/dev/null || echo "0")
+        no_perc=$(echo "${neg_opt:-0} * 100" | bc -l 2>/dev/null || echo "0")
+        r_perc=$(echo "${reach:-0} * 100" | bc -l 2>/dev/null || echo "0")
+        printf " %5s | %7s | %8.4f | %5.1f%% | %5.1f%% | %5.1f%% | %5.1f\n" \
+            "$n" "${tenv:-0}" "${ret:-0}" "${n_perc:-0}" "${no_perc:-0}" "${r_perc:-0}" "${eplen:-0}"
     done
     echo ""
 }
@@ -201,7 +202,7 @@ echo ""
 
 PIDS=()
 for alg in "${ALGOS[@]}"; do
-    logfile="$RESULTS_DIR/training_${alg}.log"
+    logfile="$LOGS_DIR/${alg}.log"
     extra=$(algo_extra_args "$alg")
     log "  Starting $alg -> $logfile ${extra:+(${extra})}"
     nohup python "$EPYMARL_SRC/main.py" \
@@ -220,10 +221,10 @@ done
 echo ""
 log "All training jobs launched:"
 for i in "${!ALGOS[@]}"; do
-    echo "  ${ALGOS[$i]}  PID=${PIDS[$i]}  log=$RESULTS_DIR/training_${ALGOS[$i]}.log"
+    echo "  ${ALGOS[$i]}  PID=${PIDS[$i]}  log=$LOGS_DIR/${ALGOS[$i]}.log"
 done
 
 echo ""
 log "Monitor with:  ./train.sh --status"
 log "Kill all with: ./train.sh --kill"
-log "Tail a log:    tail -f $RESULTS_DIR/training_<algo>.log"
+log "Tail a log:    tail -f $LOGS_DIR/<algo>.log"
