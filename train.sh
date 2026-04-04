@@ -5,7 +5,7 @@
 # Usage:
 #   ./train.sh                  # train all algorithms (iql qmix vdn mappo coma)
 #   ./train.sh qmix mappo       # train only qmix and mappo
-#   ./train.sh --status          # live dashboard (run from repo root, or use absolute path to this script)
+#   ./train.sh --status          # live dashboard (refreshes every 5s; Ctrl+C to stop)
 #   ./train.sh --kill            # kill all running training processes
 #
 # Results layout (epymarl/results/): logs/ (nohup), sacred/, models/
@@ -85,8 +85,15 @@ show_status() {
 # ── Parse arguments ──────────────────────────────────────────────────────
 
 if [[ "${1:-}" == "--status" ]]; then
-    watch -n 5 "$0 --status-once"
-    exit 0
+    # Do not use `watch`: it often exits immediately with no output when stdout is not a TTY
+    # (common over SSH, tmux, or redirected sessions). Refresh with a plain loop instead.
+    while true; do
+        if [[ -t 1 ]]; then
+            clear 2>/dev/null || printf '\033[2J\033[H'
+        fi
+        bash "$SCRIPT_DIR/train.sh" --status-once
+        sleep 5
+    done
 fi
 
 if [[ "${1:-}" == "--status-once" ]]; then
