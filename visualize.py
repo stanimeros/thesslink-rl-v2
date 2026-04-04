@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Visualize training results from Sacred metrics.
 
-Reads epymarl/results/sacred/ and generates:
-  1. Multi-algorithm comparison training curves
-  2. Per-algorithm eval heatmaps (same seed/scenario)
-  3. Per-algorithm episode replay GIFs (same seed/scenario, random actions)
+With **no** Sacred results (or no matching ``--algo``): writes **3** placeholder
+files only — ``training_curves-example.png``, ``eval_heatmaps-example.png``,
+``episode_replay-example.gif``.
+
+With results: ``training_curves-all.png`` (comparison) plus **3 files per
+algorithm** — per-algo training curves, eval heatmaps, and episode GIF from the
+**best** saved checkpoint under ``results/models`` (random rollout only if
+missing checkpoint or load fails).
 
 Usage:
     python visualize.py                            # all algos
     python visualize.py --algo qmix mappo          # specific algos
     python visualize.py --results epymarl/results  # custom path
+    python visualize.py --models /path/to/models   # checkpoints if not under <results>/models
 """
 
 from __future__ import annotations
@@ -23,7 +28,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from config import ENV_VERSION, ENV_TAG, GridNegotiationEnv
+from config import ENV_CONFIG, ENV_VERSION, ENV_TAG, GridNegotiationEnv
+from thesslink_rl.epymarl_eval_rollout import (
+    describe_models_dir_status,
+    find_best_checkpoint_timestep_dir,
+    load_epymarl_config_for_algo,
+    rollout_episode_frames_for_gif,
+)
 from thesslink_rl.evaluation import AgentConfig, compute_poi_scores
 from thesslink_rl.visualization import (
     _env_out_dir,
@@ -38,7 +49,8 @@ from thesslink_rl.visualization import (
 
 PROJECT = Path(__file__).resolve().parent
 PLOTS_DIR = PROJECT / "plots"
-SEED=42
+SEED = 42
+EXAMPLE_TAG = "example"
 
 ALGO_COLORS = {
     "iql": "#e74c3c",
@@ -212,8 +224,104 @@ def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
         print(f"  -> plots/{ENV_TAG}/{fname}")
 
 
-def generate_heatmaps_and_replays(algos: list[str]):
-    """Generate eval heatmaps and episode replay GIFs on the same seed."""
+def generate_example_plots() -> None:
+    """Exactly three files when no training metrics: one demo per plot type."""
+    models_dir = PROJECT / "thesslink_rl" / "models"
+    cfg_0 = AgentConfig.from_yaml(str(models_dir / "human.yaml"))
+    cfg_1 = AgentConfig.from_yaml(str(models_dir / "taxi.yaml"))
+    agent_configs = {"agent_0": cfg_0, "agent_1": cfg_1}
+    env = GridNegotiationEnv(agent_configs=agent_configs, seed=SEED)
+    env.reset(seed=SEED)
+    agents = env.possible_agents
+    for agent in agents:
+        spawn = tuple(env.spawn_positions[agent])
+        scores = compute_poi_scores(
+            spawn, spawn, env.poi_positions, env.obstacle_map,
+            agent_configs[agent],
+        )
+        env.poi_scores[agent] = scores
+
+    n = 24
+    steps = [i * 50_000 for i in range(1, n + 1)]
+    stats = {
+        "common_reward": [8.0 + i * 0.35 + (i % 3) * 0.2 for i in range(n)],
+        "negotiate": [min(98.0, 15.0 + i * 2.8) for i in range(n)],
+        "negotiate_optimal": [min(95.0, 12.0 + i * 2.2) for i in range(n)],
+        "reach": [min(99.0, 8.0 + i * 3.2) for i in range(n)],
+        "ep_len": [max(12.0, 130.0 - i * 3.5) for i in range(n)],
+    }
+
+    print(f"[1/3] Example training curves ({_make_filename('training_curves', 'png', EXAMPLE_TAG)})")
+    plot_training_curves(
+        stats,
+        window=min(10, max(1, n)),
+        save_path=True,
+        show=False,
+        algo=EXAMPLE_TAG,
+        env_name=ENV_TAG,
+        timesteps=steps,
+    )
+    print(f"  -> plots/{ENV_TAG}/{_make_filename('training_curves', 'png', EXAMPLE_TAG)}")
+
+    print(f"[2/3] Example eval heatmaps ({_make_filename('eval_heatmaps', 'png', EXAMPLE_TAG)})")
+    render_eval_heatmaps(
+        env, agent_configs,
+        save_path=True, show=False, algo=EXAMPLE_TAG,
+        env_name=ENV_TAG,
+        title="Example — add epymarl/results to plot real runs",
+    )
+    print(f"  -> plots/{ENV_TAG}/{_make_filename('eval_heatmaps', 'png', EXAMPLE_TAG)}")
+
+    env.reset(seed=SEED)
+    for agent in agents:
+        spawn = tuple(env.spawn_positions[agent])
+        scores = compute_poi_scores(
+            spawn, spawn, env.poi_positions, env.obstacle_map,
+            agent_configs[agent],
+        )
+        env.poi_scores[agent] = scores
+    frames = _random_episode_frames(env)
+    print(f"[3/3] Example episode replay ({_make_filename('episode_replay', 'gif', EXAMPLE_TAG)})")
+    replay_episode(
+        frames, env, agent_configs=agent_configs,
+        save_path=True, show=False, algo=EXAMPLE_TAG,
+        env_name=ENV_TAG,
+    )
+    print(f"  -> plots/{ENV_TAG}/{_make_filename('episode_replay', 'gif', EXAMPLE_TAG)}")
+
+
+def _random_episode_frames(env: GridNegotiationEnv, max_steps: int = 40) -> list[dict]:
+    """Fallback when no checkpoint or policy rollout fails (fixed RNG for reproducibility)."""
+    rng = np.random.RandomState(99)
+    frames = [capture_frame(env)]
+    for _ in range(max_steps):
+        if not env.agents:
+            break
+        actions = {}
+        for agent in env.agents:
+            avail = env.get_avail_actions(agent)
+            valid = [i for i, a in enumerate(avail) if a == 1]
+            actions[agent] = rng.choice(valid)
+        desc = describe_actions(env, actions)
+        obs, rewards, terminated, truncated, infos = env.step(actions)
+        frames.append(capture_frame(env, action_desc=desc))
+        if all(terminated.values()) or all(truncated.values()):
+            break
+    return frames
+
+
+def generate_heatmaps_and_replays(
+    algos: list[str],
+    *,
+    results_dir: Path | None = None,
+    runs: dict[str, dict] | None = None,
+    models_root: Path | None = None,
+):
+    """Generate eval heatmaps and episode replay GIFs on the same seed.
+
+    Episode GIFs are written **only** when a checkpoint can be loaded from
+    *models_root* (default: *results_dir*/models). No random-policy GIFs.
+    """
     models_dir = PROJECT / "thesslink_rl" / "models"
     cfg_0 = AgentConfig.from_yaml(str(models_dir / "human.yaml"))
     cfg_1 = AgentConfig.from_yaml(str(models_dir / "taxi.yaml"))
@@ -221,7 +329,8 @@ def generate_heatmaps_and_replays(algos: list[str]):
 
     env = GridNegotiationEnv(agent_configs=agent_configs, seed=SEED)
 
-    for algo in algos:
+    for raw_algo in algos:
+        algo = raw_algo.lower()
         env.reset(seed=SEED)
         agents = env.possible_agents
         for agent in agents:
@@ -247,28 +356,45 @@ def generate_heatmaps_and_replays(algos: list[str]):
             )
             env.poi_scores[agent] = scores
 
-        rng = np.random.RandomState(99)
-        frames = [capture_frame(env)]
+        frames: list[dict] | None = None
+        metrics = runs.get(algo) if runs else None
+        if results_dir is not None and metrics is not None:
+            ckpt = find_best_checkpoint_timestep_dir(
+                algo, results_dir, metrics, ENV_VERSION,
+                models_root=models_root,
+            )
+            if ckpt is not None:
+                try:
+                    cfg = load_epymarl_config_for_algo(algo, ENV_CONFIG, SEED)
+                    frames = rollout_episode_frames_for_gif(
+                        ckpt,
+                        cfg,
+                        SEED,
+                        capture_frame,
+                        describe_actions,
+                    )
+                    print(
+                        f"  episode replay ({algo}): policy from {ckpt.name} "
+                        f"({ckpt.parent.name})",
+                    )
+                except Exception as e:
+                    print(
+                        f"  episode replay ({algo}): skipped — load/rollout failed: {e!r}",
+                    )
+            else:
+                hint = describe_models_dir_status(models_root, results_dir)
+                print(f"  episode replay ({algo}): skipped — {hint}")
+        elif results_dir is not None:
+            print(
+                f"  episode replay ({algo}): skipped — no Sacred metrics for this algo",
+            )
 
-        for _ in range(40):
-            if not env.agents:
-                break
-            actions = {}
-            for agent in env.agents:
-                avail = env.get_avail_actions(agent)
-                valid = [i for i, a in enumerate(avail) if a == 1]
-                actions[agent] = rng.choice(valid)
-            desc = describe_actions(env, actions)
-            obs, rewards, terminated, truncated, infos = env.step(actions)
-            frames.append(capture_frame(env, action_desc=desc))
-            if all(terminated.values()) or all(truncated.values()):
-                break
-
-        fname = _make_filename("episode_replay", "gif", algo)
-        replay_episode(frames, env, agent_configs=agent_configs,
-                       save_path=True, show=False, algo=algo,
-                       env_name=ENV_TAG)
-        print(f"  -> plots/{ENV_TAG}/{fname}")
+        if frames is not None:
+            fname = _make_filename("episode_replay", "gif", algo)
+            replay_episode(frames, env, agent_configs=agent_configs,
+                           save_path=True, show=False, algo=algo,
+                           env_name=ENV_TAG)
+            print(f"  -> plots/{ENV_TAG}/{fname}")
 
 
 def print_summary(runs: dict[str, dict]):
@@ -309,6 +435,12 @@ def main():
                         help="Algorithms to visualize (default: all found)")
     parser.add_argument("--results", type=str, default="epymarl/results",
                         help="Path to results directory")
+    parser.add_argument(
+        "--models",
+        type=str,
+        default=None,
+        help="Checkpoint directory (agent.th trees). Default: <results>/models",
+    )
     parser.add_argument("--window", type=int, default=10,
                         help="Smoothing window for curves")
     args = parser.parse_args()
@@ -317,37 +449,48 @@ def main():
 
     results_dir = Path(args.results)
     runs = discover_runs(results_dir)
+    if args.algo:
+        wanted = {a.lower() for a in args.algo}
+        runs = {k: v for k, v in runs.items() if k in wanted}
 
     if not runs:
-        print("No training results found. Generating random episode replay & heatmaps...")
-        algos = args.algo or ["random"]
-        generate_heatmaps_and_replays(algos)
+        print(
+            "No Sacred metrics for this selection — writing exactly 3 example files "
+            f"(*-{EXAMPLE_TAG}.*).",
+        )
+        generate_example_plots()
         print(f"Done! Plots saved to plots/{ENV_TAG}/")
         return
 
-    if args.algo:
-        runs = {k: v for k, v in runs.items() if k in args.algo}
-        if not runs:
-            print(f"No results for: {args.algo}. Generating random episode replay & heatmaps...")
-            generate_heatmaps_and_replays(args.algo)
-            print(f"Done! Plots saved to plots/{ENV_TAG}/")
-            return
-
-    algos = list(runs.keys())
+    algos = sorted(runs.keys())
     print(f"Found {len(algos)} algorithm(s): {', '.join(a.upper() for a in algos)}")
+    models_root = Path(args.models) if args.models else None
+    mr_display = models_root or (results_dir / "models")
+    print(
+        "Each algorithm: training_curves-<alg>.png, eval_heatmaps-<alg>.png, "
+        f"episode_replay-<alg>.gif only if checkpoints exist under {mr_display}.",
+    )
+    print(
+        "Plus training_curves-all.png comparing all selected algorithms.\n",
+    )
 
     print_summary(runs)
 
-    print("[1/3] Comparison training curves...")
+    print("[1/3] Comparison — training_curves-all.png")
     plot_comparison_curves(runs, window=args.window)
 
-    print("[2/3] Per-algorithm training curves...")
+    print("[2/3] Per-algorithm training curves (one PNG per algo)...")
     plot_per_algo_curves(runs, window=args.window)
 
-    print("[3/3] Eval heatmaps & episode replays...")
-    generate_heatmaps_and_replays(algos)
+    print("[3/3] Per-algorithm eval heatmaps + episode GIFs (best checkpoint)...")
+    generate_heatmaps_and_replays(
+        algos,
+        results_dir=results_dir,
+        runs=runs,
+        models_root=models_root,
+    )
 
-    print(f"Done! All plots saved to plots/{ENV_TAG}/")
+    print(f"Done! Plots saved to plots/{ENV_TAG}/")
 
 
 if __name__ == "__main__":
