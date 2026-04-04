@@ -64,7 +64,11 @@ show_status() {
         [ -f "$logf" ] || continue
         local tenv ret neg neg_opt reach eplen n n_perc no_perc r_perc
         tenv=$(grep -a 't_env:' "$logf" 2>/dev/null | tail -n1 | awk -F't_env: ' '{print $2}' | awk '{print $1}' | tr -d ',')
-        ret=$(grep -a 'test_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        # common_reward=False (IQL, MAPPO): test_total_return_mean = mean episode sum of agents
+        ret=$(grep -a 'test_total_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_total_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        if [ -z "$ret" ]; then
+            ret=$(grep -a 'test_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
+        fi
         neg=$(grep -a 'test_negotiation_agreed_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_negotiation_agreed_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         neg_opt=$(grep -a 'test_negotiation_optimal_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_negotiation_optimal_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         reach=$(grep -a 'test_reached_poi_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_reached_poi_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')

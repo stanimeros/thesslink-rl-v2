@@ -84,17 +84,17 @@ def discover_runs(results_dir: Path) -> dict[str, dict]:
 def _test_reward_series(metrics: dict) -> tuple[np.ndarray, np.ndarray]:
     """Timesteps and values for test reward.
 
-    When ``common_reward`` is True, EPyMARL logs ``test_return_mean``.
-    When False (IQL, MAPPO, …), it logs ``test_total_return_mean`` (mean episode
-    sum of per-agent returns) and ``test_agent_i_return_mean``. Prefer common,
-    then total, then sum of ``test_agent_*_return_mean`` if aligned.
+    Prefer ``test_total_return_mean`` when present (``common_reward=False``: IQL,
+    MAPPO log mean episode sum of per-agent returns). Otherwise
+    ``test_return_mean`` (common reward). Finally sum ``test_agent_*_return_mean``
+    if aligned on steps.
     """
-    rm = metrics.get("test_return_mean", {})
-    if rm.get("values"):
-        return np.asarray(rm["steps"], dtype=float), np.asarray(rm["values"], dtype=float)
     tr = metrics.get("test_total_return_mean", {})
     if tr.get("values"):
         return np.asarray(tr["steps"], dtype=float), np.asarray(tr["values"], dtype=float)
+    rm = metrics.get("test_return_mean", {})
+    if rm.get("values"):
+        return np.asarray(rm["steps"], dtype=float), np.asarray(rm["values"], dtype=float)
     keys = sorted(
         k for k in metrics
         if k.startswith("test_agent_") and k.endswith("_return_mean")

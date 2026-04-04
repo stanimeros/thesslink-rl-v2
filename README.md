@@ -1,4 +1,4 @@
-# ThessLink RL v2 -- Multi-Agent Grid Negotiation for EPyMARL
+# ThessLink RL -- Multi-Agent Grid Negotiation for EPyMARL
 
 Multi-Agent Reinforcement Learning environment where two agents **negotiate** over Points of Interest (POIs) on a 10x10 grid, then **navigate** to the agreed target. Both phases are **RL-trained** -- agents learn to negotiate through suggest/accept actions and to navigate with movement actions. Designed to plug into [EPyMARL](https://github.com/uoe-agents/epymarl) for training with algorithms like QMIX, MAPPO, VDN, IQL, and more.
 
