@@ -81,6 +81,42 @@ def discover_runs(results_dir: Path) -> dict[str, dict]:
     return runs
 
 
+def _test_reward_series(metrics: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Timesteps and values for test reward.
+
+    When ``common_reward`` is True, EPyMARL logs ``test_return_mean``.
+    When False (IQL, MAPPO, …), it logs ``test_total_return_mean`` (mean episode
+    sum of per-agent returns) and ``test_agent_i_return_mean``. Prefer common,
+    then total, then sum of ``test_agent_*_return_mean`` if aligned.
+    """
+    rm = metrics.get("test_return_mean", {})
+    if rm.get("values"):
+        return np.asarray(rm["steps"], dtype=float), np.asarray(rm["values"], dtype=float)
+    tr = metrics.get("test_total_return_mean", {})
+    if tr.get("values"):
+        return np.asarray(tr["steps"], dtype=float), np.asarray(tr["values"], dtype=float)
+    keys = sorted(
+        k for k in metrics
+        if k.startswith("test_agent_") and k.endswith("_return_mean")
+    )
+    if not keys:
+        return np.array([]), np.array([])
+    steps = np.asarray(metrics[keys[0]]["steps"], dtype=float)
+    total = np.zeros(len(metrics[keys[0]]["values"]), dtype=float)
+    for k in keys:
+        m = metrics[k]
+        if not m.get("values"):
+            continue
+        s = np.asarray(m["steps"], dtype=float)
+        v = np.asarray(m["values"], dtype=float)
+        if s.shape != steps.shape or (s != steps).any() or v.shape[0] != total.shape[0]:
+            continue
+        total += v
+    if total.size == 0:
+        return np.array([]), np.array([])
+    return steps, total
+
+
 def plot_comparison_curves(
     runs: dict[str, dict],
     window: int = 10,
@@ -89,15 +125,32 @@ def plot_comparison_curves(
     """Plot all algorithms on the same figure for comparison."""
     fig, axes = plt.subplots(1, 5, figsize=(27, 5))
 
+    # Reward: common mean, or total Σ-agents mean when common_reward is off
+    ax0 = axes[0]
+    has_reward = False
+    for algo, metrics in runs.items():
+        steps, values = _test_reward_series(metrics)
+        if values.size == 0:
+            continue
+        has_reward = True
+        color = ALGO_COLORS.get(algo, None)
+        ax0.plot(steps, values, alpha=0.3, color=color, linewidth=0.8)
+        smoothed = rolling_mean_expanding(values, window)
+        ax0.plot(steps, smoothed, color=color, linewidth=2, label=algo.upper())
+    ax0.set_xlabel("Timesteps")
+    ax0.set_title("Mean reward (common or Σ agents)", fontsize=12)
+    if has_reward:
+        ax0.legend(fontsize=9)
+    ax0.grid(True, alpha=0.3)
+
     panels = [
-        ("test_return_mean", "Mean common reward", False),
         ("test_negotiation_agreed_mean", "Negotiate rate (%)", True),
         ("test_negotiation_optimal_mean", "Optimal negotiate (%)", True),
         ("test_battle_won_mean", "Reach rate (%)", True),
         ("test_ep_length_mean", "Episode length", False),
     ]
 
-    for ax, (metric_key, label, as_percent) in zip(axes, panels):
+    for ax, (metric_key, label, as_percent) in zip(axes[1:], panels):
         has_data = False
         for algo, metrics in runs.items():
             if metric_key not in metrics:
@@ -121,7 +174,7 @@ def plot_comparison_curves(
         if as_percent:
             ax.set_ylim(0, 105)
         if metric_key == "test_ep_length_mean":
-            ax.set_ylim(0, 105)
+            ax.set_ylim(bottom=0)
 
     fig.suptitle("Algorithm Comparison -- ThessLink Grid Negotiation", fontsize=14, y=1.02)
     plt.tight_layout()
@@ -136,8 +189,9 @@ def plot_comparison_curves(
 def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
     """Plot individual training curves per algorithm."""
     for algo, metrics in runs.items():
-        steps = metrics.get("test_return_mean", {}).get("steps", [])
-        gm = metrics.get("test_return_mean", {}).get("values", [])
+        steps_arr, vals_arr = _test_reward_series(metrics)
+        steps = steps_arr.tolist() if steps_arr.size else []
+        gm = vals_arr.tolist() if vals_arr.size else []
         neg = metrics.get("test_negotiation_agreed_mean", {}).get("values", [])
         neg_opt = metrics.get("test_negotiation_optimal_mean", {}).get("values", [])
         reached = metrics.get("test_battle_won_mean", {}).get("values", [])
@@ -231,12 +285,13 @@ def print_summary(runs: dict[str, dict]):
     print(header)
     print("  " + "-" * (len(header) - 2))
     for algo, metrics in sorted(runs.items()):
-        ret = metrics.get("test_return_mean", {}).get("values", [])
+        steps_arr, vals_arr = _test_reward_series(metrics)
+        ret = vals_arr.tolist() if vals_arr.size else []
+        steps = steps_arr.tolist() if steps_arr.size else []
         neg = metrics.get("test_negotiation_agreed_mean", {}).get("values", [])
         neg_opt = metrics.get("test_negotiation_optimal_mean", {}).get("values", [])
         bw = metrics.get("test_battle_won_mean", {}).get("values", [])
         epl = metrics.get("test_ep_length_mean", {}).get("values", [])
-        steps = metrics.get("test_return_mean", {}).get("steps", [])
 
         def _pct(vals):
             return f"{(vals[-1] * 100):>7.1f}%" if vals else "     —  "
