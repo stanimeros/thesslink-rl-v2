@@ -1,15 +1,17 @@
-"""Core grid environment v1: symbolic observations instead of raw grid.
+"""Core grid environment v1: symbolic observations with GPS signal.
 
-Observation vector (size 23):
-  phase_flag   (1)  0.0 = Negotiation, 1.0 = Navigation
-  self_scores  (3)  Agent's preference scores for the 3 POIs
-  peer_action  (4)  One-hot: [No action, Suggest 0, Suggest 1, Suggest 2]
-  agreed_poi   (3)  One-hot: which POI was agreed (all 0 during negotiation)
-  self_pos     (2)  (x, y) normalised to [0, 1]
-  poi_pos      (6)  (x, y) × 3 POIs, normalised to [0, 1]
-  lidar        (4)  Distance to nearest obstacle in [N, S, E, W], normalised
+Observation vector (size 19):
+  phase_flag    (1)  0.0 = Negotiation, 1.0 = Navigation
+  self_scores   (3)  Agent's preference scores for the 3 POIs
+  peer_action   (4)  One-hot: [No action, Suggest 0, Suggest 1, Suggest 2]
+  agreed_poi    (3)  One-hot: which POI was agreed (all 0 during negotiation)
+  self_pos      (2)  (row, col) normalised to [0, 1]
+  relative_pos  (2)  (target_row - self_row, target_col - self_col) / (GRID_SIZE-1)
+                     zero during negotiation; GPS towards agreed POI during navigation
+  lidar         (4)  Distance to nearest obstacle in [N, S, E, W], normalised
 
-Same two-phase turn-based negotiation + navigation logic as v0.
+Cooperative meeting: episode ends only when ALL agents reach the agreed POI.
+Agents that arrive first are frozen (only Stay action available).
 """
 
 from __future__ import annotations
@@ -37,24 +39,26 @@ AGREED_POI_DIM = NUM_POIS  # 3
 PHASE_DIM = 1
 SELF_SCORES_DIM = NUM_POIS  # 3
 SELF_POS_DIM = 2
-POI_POS_DIM = NUM_POIS * 2  # 6
+RELATIVE_POS_DIM = 2  # (target - self) normalised
 LIDAR_DIM = 4  # N, S, E, W
 
 OBS_FLAT_SIZE = (
-    PHASE_DIM          # 1
-    + SELF_SCORES_DIM  # 3
-    + PEER_ACTION_DIM  # 4
-    + AGREED_POI_DIM   # 3
-    + SELF_POS_DIM     # 2
-    + POI_POS_DIM      # 6
-    + LIDAR_DIM        # 4
-)  # = 23
+    PHASE_DIM           # 1
+    + SELF_SCORES_DIM   # 3
+    + PEER_ACTION_DIM   # 4
+    + AGREED_POI_DIM    # 3
+    + SELF_POS_DIM      # 2
+    + RELATIVE_POS_DIM  # 2
+    + LIDAR_DIM         # 4
+)  # = 19
 
 
 class GridNegotiationEnv:
-    """Two agents negotiate over POIs then navigate to the agreed one.
+    """Two agents negotiate over POIs then both navigate to the agreed one.
 
-    v1: symbolic observation vector (23 features) instead of raw 10x10 grid.
+    Cooperative meeting: the episode terminates only when ALL agents have
+    reached the agreed POI.  An agent that arrives first is frozen in place
+    (action mask allows only Stay).
     """
 
     metadata = {"name": ENV_TAG, "render_modes": ["human"]}
@@ -80,6 +84,7 @@ class GridNegotiationEnv:
         self.phase = "negotiation"
         self.agreed_poi: Optional[int] = None
         self.neg_turn: Optional[str] = None
+        self.agents_reached: Dict[str, bool] = {}
 
     def reset(self, seed=None, options=None) -> tuple[Dict, Dict]:
         if seed is not None:
@@ -97,6 +102,7 @@ class GridNegotiationEnv:
         self.agreed_poi = None
         self.last_suggestion = {}
         self.poi_scores = {}
+        self.agents_reached = {a: False for a in self.possible_agents}
 
         first = int(self._rng.randint(0, NUM_AGENTS))
         self.neg_turn = self.possible_agents[first]
@@ -136,19 +142,22 @@ class GridNegotiationEnv:
 
         elif self.phase == "navigation":
             for agent, act in actions.items():
-                if 0 <= act < NUM_MOVE_ACTIONS:
-                    self._apply_move(agent, act)
+                if not self.agents_reached.get(agent, False):
+                    if 0 <= act < NUM_MOVE_ACTIONS:
+                        self._apply_move(agent, act)
 
             if self.agreed_poi is not None:
                 target = self.poi_positions[self.agreed_poi]
                 for a in self.agents:
                     if tuple(self.agent_positions[a]) == target:
-                        terminated = {ag: True for ag in self.agents}
-                        infos = {
-                            ag: {"reached_poi": self.agreed_poi, "phase": self.phase}
-                            for ag in self.agents
-                        }
-                        break
+                        self.agents_reached[a] = True
+
+                if all(self.agents_reached[a] for a in self.agents):
+                    terminated = {ag: True for ag in self.agents}
+                    infos = {
+                        ag: {"reached_poi": self.agreed_poi, "phase": self.phase}
+                        for ag in self.agents
+                    }
 
         obs = {a: self._get_obs(a) for a in self.agents}
 
@@ -172,8 +181,11 @@ class GridNegotiationEnv:
             else:
                 mask[0] = 1
         else:
-            for i in range(NUM_MOVE_ACTIONS):
-                mask[i] = 1
+            if self.agents_reached.get(agent, False):
+                mask[0] = 1  # frozen — only Stay
+            else:
+                for i in range(NUM_MOVE_ACTIONS):
+                    mask[i] = 1
         return mask
 
     # --- Helpers ----------------------------------------------------------
@@ -225,7 +237,7 @@ class GridNegotiationEnv:
         return distances
 
     def _get_obs(self, agent: str) -> np.ndarray:
-        """Symbolic observation vector of size OBS_FLAT_SIZE (23)."""
+        """Symbolic observation vector of size OBS_FLAT_SIZE (19)."""
         phase_flag = np.array(
             [1.0 if self.phase == "navigation" else 0.0], dtype=np.float32,
         )
@@ -249,10 +261,11 @@ class GridNegotiationEnv:
         norm = GRID_SIZE - 1
         self_pos = np.array([r / norm, c / norm], dtype=np.float32)
 
-        poi_pos = np.zeros(POI_POS_DIM, dtype=np.float32)
-        for i, (pr, pc) in enumerate(self.poi_positions):
-            poi_pos[i * 2] = pr / norm
-            poi_pos[i * 2 + 1] = pc / norm
+        relative_pos = np.zeros(RELATIVE_POS_DIM, dtype=np.float32)
+        if self.agreed_poi is not None:
+            tr, tc = self.poi_positions[self.agreed_poi]
+            relative_pos[0] = (tr - r) / norm
+            relative_pos[1] = (tc - c) / norm
 
         lidar = self._lidar(r, c)
 
@@ -262,6 +275,6 @@ class GridNegotiationEnv:
             peer_action_onehot,
             agreed_onehot,
             self_pos,
-            poi_pos,
+            relative_pos,
             lidar,
         ])

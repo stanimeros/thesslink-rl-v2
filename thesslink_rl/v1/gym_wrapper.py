@@ -1,8 +1,8 @@
-"""Gymnasium multi-agent wrapper for EPyMARL -- v1 (symbolic observations).
+"""Gymnasium multi-agent wrapper for EPyMARL -- v1 (cooperative meeting).
 
-Same interface as gym_wrapper.py but uses environment_v1 with a flat
-23-feature symbolic observation vector instead of the 313-feature
-grid-based observation.
+Symbolic 19-feature observation vector with GPS signal.
+Reward: agreement bonus, step penalty (-0.05), terminal (+50 * quality).
+Episode ends when ALL agents reach the agreed POI.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from .environment import (
 )
 from ..evaluation import (
     AgentConfig,
-    bfs_distances,
     compute_poi_scores,
     negotiation_quality,
     optimal_poi,
@@ -65,7 +64,7 @@ class GridNegotiationGymEnv(gym.Env):
         self.observation_space = spaces.Tuple(
             tuple(
                 spaces.Box(
-                    low=0.0,
+                    low=-1.0,
                     high=1.0,
                     shape=(OBS_FLAT_SIZE,),
                     dtype=np.float32,
@@ -77,8 +76,6 @@ class GridNegotiationGymEnv(gym.Env):
         self._poi_scores: Dict[str, np.ndarray] = {}
         self._agreed_poi: int | None = None
         self._optimal_poi: int = 0
-        self._prev_dist: Dict[str, float] = {}
-        self._nav_steps: int = 0
 
     def reset(
         self, seed: int | None = None, options: dict | None = None
@@ -99,8 +96,6 @@ class GridNegotiationGymEnv(gym.Env):
 
         self._agreed_poi = None
         self._optimal_poi = optimal_poi(self._poi_scores, agents)
-        self._prev_dist = {}
-        self._nav_steps = 0
 
         obs_tuple = tuple(
             self._env._get_obs(a) for a in agents
@@ -111,14 +106,6 @@ class GridNegotiationGymEnv(gym.Env):
             "optimal_poi": self._optimal_poi,
         }
         return obs_tuple, info
-
-    def _bfs_dist_to_target(self, agent: str) -> float:
-        """BFS distance from agent's current position to the agreed POI."""
-        target = self._env.poi_positions[self._agreed_poi]
-        pos = tuple(self._env.agent_positions[agent])
-        dist_map = bfs_distances(pos, self._env.obstacle_map)
-        d = dist_map[target[0], target[1]]
-        return float(d) if np.isfinite(d) else float(self._env.obstacle_map.size)
 
     def step(
         self, actions: list[int] | tuple[int, ...] | np.ndarray
@@ -140,43 +127,32 @@ class GridNegotiationGymEnv(gym.Env):
                 self._agreed_poi, self._poi_scores, agents,
             )
             rewards = [quality * 5.0] * self.n_agents
-            for a in agents:
-                self._prev_dist[a] = self._bfs_dist_to_target(a)
 
         if self._agreed_poi is not None and not just_agreed:
-            self._nav_steps += 1
-            target = self._env.poi_positions[self._agreed_poi]
-            reached = False
-            for i, a in enumerate(agents):
-                pos = tuple(self._env.agent_positions.get(a, [-1, -1]))
-                if pos == target:
-                    reached = True
-                new_dist = self._bfs_dist_to_target(a)
-                old_dist = self._prev_dist.get(a, new_dist)
-                rewards[i] += (old_dist - new_dist) * 0.05
-                self._prev_dist[a] = new_dist
-
             for i in range(self.n_agents):
-                rewards[i] -= 0.01
+                rewards[i] -= 0.05
 
-            if reached:
+            all_reached = all(self._env.agents_reached[a] for a in agents)
+            if all_reached:
                 quality = negotiation_quality(
                     self._agreed_poi, self._poi_scores, agents,
                 )
-                rewards = [quality * 20.0] * self.n_agents
+                rewards = [quality * 50.0] * self.n_agents
 
         done = all(terminated_d[a] for a in agents)
         truncated = all(truncated_d[a] for a in agents)
 
-        reached = any("reached_poi" in infos_d.get(a, {}) for a in agents)
+        all_reached = all(
+            "reached_poi" in infos_d.get(a, {}) for a in agents
+        )
         negotiation_agreed = self._env.agreed_poi is not None
         agreed_optimal = (
             negotiation_agreed and self._agreed_poi == self._optimal_poi
         )
 
         info: dict[str, Any] = {
-            "battle_won": reached,
-            "reached_poi": int(reached),
+            "battle_won": all_reached,
+            "reached_poi": int(all_reached),
             "negotiation_agreed": float(negotiation_agreed),
             "negotiation_optimal": float(agreed_optimal),
         }

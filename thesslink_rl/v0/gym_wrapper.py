@@ -162,12 +162,7 @@ class GridNegotiationGymEnv(gym.Env):
 
         if self._agreed_poi is not None and not just_agreed:
             self._nav_steps += 1
-            target = self._env.poi_positions[self._agreed_poi]
-            reached = False
             for i, a in enumerate(agents):
-                pos = tuple(self._env.agent_positions.get(a, [-1, -1]))
-                if pos == target:
-                    reached = True
                 new_dist = self._bfs_dist_to_target(a)
                 old_dist = self._prev_dist.get(a, new_dist)
                 rewards[i] += (old_dist - new_dist) * 0.05
@@ -176,7 +171,8 @@ class GridNegotiationGymEnv(gym.Env):
             for i in range(self.n_agents):
                 rewards[i] -= 0.01
 
-            if reached:
+            all_reached = all(self._env.agents_reached[a] for a in agents)
+            if all_reached:
                 quality = negotiation_quality(
                     self._agreed_poi, self._poi_scores, agents,
                 )
@@ -185,15 +181,17 @@ class GridNegotiationGymEnv(gym.Env):
         done = all(terminated_d[a] for a in agents)
         truncated = all(truncated_d[a] for a in agents)
 
-        reached = any("reached_poi" in infos_d.get(a, {}) for a in agents)
+        all_reached = all(
+            "reached_poi" in infos_d.get(a, {}) for a in agents
+        )
         negotiation_agreed = self._env.agreed_poi is not None
         agreed_optimal = (
             negotiation_agreed and self._agreed_poi == self._optimal_poi
         )
 
         info: dict[str, Any] = {
-            "battle_won": reached,
-            "reached_poi": int(reached),
+            "battle_won": all_reached,
+            "reached_poi": int(all_reached),
             "negotiation_agreed": float(negotiation_agreed),
             "negotiation_optimal": float(agreed_optimal),
         }

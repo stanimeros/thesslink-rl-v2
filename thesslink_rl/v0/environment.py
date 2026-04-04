@@ -52,7 +52,11 @@ OBS_FLAT_SIZE = PHASE_DIM + NEG_INFO_DIM + AGREED_POI_DIM + GRID_FLAT_DIM  # 313
 
 
 class GridNegotiationEnv:
-    """Two agents negotiate over POIs then navigate to the agreed one.
+    """Two agents negotiate over POIs then both navigate to the agreed one.
+
+    Cooperative meeting: the episode terminates only when ALL agents have
+    reached the agreed POI.  An agent that arrives first is frozen in place
+    (action mask allows only Stay).
 
     Negotiation is turn-based. A random agent starts. The active agent
     can *suggest* a POI or *accept* the peer's last suggestion. The
@@ -83,6 +87,7 @@ class GridNegotiationEnv:
         self.phase = "negotiation"
         self.agreed_poi: Optional[int] = None
         self.neg_turn: Optional[str] = None  # which agent acts this step
+        self.agents_reached: Dict[str, bool] = {}
 
     def reset(self, seed=None, options=None) -> tuple[Dict, Dict]:
         if seed is not None:
@@ -100,6 +105,7 @@ class GridNegotiationEnv:
         self.agreed_poi = None
         self.last_suggestion = {}
         self.poi_scores = {}
+        self.agents_reached = {a: False for a in self.possible_agents}
 
         first = int(self._rng.randint(0, NUM_AGENTS))
         self.neg_turn = self.possible_agents[first]
@@ -139,19 +145,22 @@ class GridNegotiationEnv:
 
         elif self.phase == "navigation":
             for agent, act in actions.items():
-                if 0 <= act < NUM_MOVE_ACTIONS:
-                    self._apply_move(agent, act)
+                if not self.agents_reached.get(agent, False):
+                    if 0 <= act < NUM_MOVE_ACTIONS:
+                        self._apply_move(agent, act)
 
             if self.agreed_poi is not None:
                 target = self.poi_positions[self.agreed_poi]
                 for a in self.agents:
                     if tuple(self.agent_positions[a]) == target:
-                        terminated = {ag: True for ag in self.agents}
-                        infos = {
-                            ag: {"reached_poi": self.agreed_poi, "phase": self.phase}
-                            for ag in self.agents
-                        }
-                        break
+                        self.agents_reached[a] = True
+
+                if all(self.agents_reached[a] for a in self.agents):
+                    terminated = {ag: True for ag in self.agents}
+                    infos = {
+                        ag: {"reached_poi": self.agreed_poi, "phase": self.phase}
+                        for ag in self.agents
+                    }
 
         obs = {a: self._get_obs(a) for a in self.agents}
 
@@ -175,8 +184,11 @@ class GridNegotiationEnv:
             else:
                 mask[0] = 1  # passive agent: no-op (stay)
         else:
-            for i in range(NUM_MOVE_ACTIONS):
-                mask[i] = 1
+            if self.agents_reached.get(agent, False):
+                mask[0] = 1  # frozen — only Stay
+            else:
+                for i in range(NUM_MOVE_ACTIONS):
+                    mask[i] = 1
         return mask
 
     # --- Helpers ----------------------------------------------------------
