@@ -3,15 +3,18 @@
 Energy cost is dynamic — computed from the agent's current position to each
 POI using BFS (respecting obstacles).  The ``energy_model`` shapes the cost
 curve: ``linear`` means each step costs equally; ``exponential`` means cost
-per step grows, so distant POIs are disproportionately expensive.
+per step grows **geometrically**: step ``i`` costs ``gamma**(i-1)`` (first step
+cost ``1``), so total for ``d`` steps is ``(gamma**d - 1) / (gamma - 1)`` when
+``gamma != 1``.  YAML: ``energy_exponential_gamma`` is ``gamma``.
 
-Privacy score is static — computed from the agent's spawn location to each
-POI using BFS.  A POI far from spawn is high privacy because an observer
-cannot easily infer the agent's origin.
+``energy_step`` multiplies the whole travel cost (e.g. gas vs electric units).
 
-Both components are **min-max normalised across the candidate POIs** so they
-occupy the same [0, 1] scale.  This ensures ``privacy_emphasis`` blends them
-fairly regardless of energy model or grid layout.
+Privacy value is static — BFS distance from spawn to each POI, divided by the
+maximum BFS distance reachable from spawn on the map (not min-max across only
+the three POIs).
+
+Energy scores are **min-max normalised across the candidate POIs**; privacy is
+already in [0, 1].  Combined linearly: ``(1-p) · energy + p · privacy``.
 """
 
 from __future__ import annotations
@@ -32,7 +35,8 @@ class AgentConfig:
     name: str
     privacy_emphasis: float         # 0-1, higher = prefers POIs far from spawn
     energy_model: str               # "linear" or "exponential"
-    energy_exponential_gamma: float
+    energy_exponential_gamma: float  # γ: geometric ratio between step costs (ignored if linear)
+    energy_step: float              # scales total energy cost (e.g. gas vs electric)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AgentConfig":
@@ -42,7 +46,8 @@ class AgentConfig:
             name=d["name"],
             privacy_emphasis=d.get("privacy_emphasis", 0.5),
             energy_model=d.get("energy_model", "linear"),
-            energy_exponential_gamma=d.get("energy_exponential_gamma", 0.12),
+            energy_exponential_gamma=d.get("energy_exponential_gamma", 2.0),
+            energy_step=float(d.get("energy_step", 1.0)),
         )
 
 
@@ -71,20 +76,42 @@ def bfs_distances(
 def _energy_cost(dist: float, cfg: AgentConfig) -> float:
     """Total energy to travel *dist* steps under the agent's energy model.
 
-    ``linear``:      cost = dist
-    ``exponential``:  cost = (1 - e^{-γ·dist}) / γ   (saturates for large dist)
+    ``linear``:      cost = ``energy_step * dist``
+    ``exponential``: step ``i`` costs ``γ^{i-1}`` (first step = 1); total for
+    ``d`` steps is ``energy_step * (γ^d - 1) / (γ - 1)`` for ``γ != 1``, else
+    ``energy_step * d``.
     """
+    scale = float(cfg.energy_step)
+    if scale <= 0:
+        scale = 1.0
+    if not np.isfinite(dist):
+        return 1e9
+    if dist <= 0:
+        return 0.0
+    d = int(round(dist))
+    if d <= 0:
+        return 0.0
     if cfg.energy_model == "exponential":
-        gamma = cfg.energy_exponential_gamma
-        return float((1.0 - np.exp(-gamma * dist)) / gamma)
-    return float(dist)
+        gamma = float(cfg.energy_exponential_gamma)
+        if gamma <= 0:
+            return scale * float(d)
+        if abs(gamma - 1.0) < 1e-12:
+            return scale * float(d)
+        return scale * float((gamma**d - 1.0) / (gamma - 1.0))
+    return scale * float(dist)
 
 
-def _minmax(arr: np.ndarray) -> np.ndarray:
-    """Min-max normalise *arr* to [0, 1].  Returns zeros if range is 0."""
+def _minmax(arr: np.ndarray, *, equal_fill: float = 0.5) -> np.ndarray:
+    """Min-max normalise *arr* to [0, 1].
+
+    When all values are equal (zero range), returns ``equal_fill`` for each
+    entry.  For **cost** (lower is better), use ``equal_fill=0`` before flipping.
+    For **distance** (higher is better for privacy), use ``equal_fill=1`` so
+    ties mean “all equally good,” not 0.5 which collapses the blend to 0.5.
+    """
     lo, hi = float(arr.min()), float(arr.max())
     if hi - lo < 1e-12:
-        return np.full_like(arr, 0.5)
+        return np.full_like(arr, equal_fill, dtype=np.float64)
     return (arr - lo) / (hi - lo)
 
 
@@ -99,13 +126,14 @@ def compute_poi_scores(
 
     1. Raw energy cost — BFS from *current_pos* to each POI, shaped by
        ``cfg.energy_model``.  Lower cost → higher energy score.
-    2. Raw privacy distance — BFS from *spawn* to each POI.
-       Greater distance → higher privacy score.
-    3. Each component is **min-max normalised across the POIs** so the
-       cheapest POI gets energy = 1 and the most expensive gets 0;
-       the farthest-from-spawn POI gets privacy = 1 and the closest
-       gets 0.
-    4. Final score = (1 - p) · energy_norm + p · privacy_norm.
+    2. Privacy value — BFS distance from *spawn* to each POI, scaled by the
+       maximum BFS distance from *spawn* to any reachable cell (absolute scale,
+       not min-max across only the three POIs).  Nearby meeting spots keep
+       moderate privacy; only very far POIs approach 1.
+    3. Energy — raw travel cost is **min-max normalised across the POIs**
+       (cheapest → 1, most expensive → 0).  Exponential step costs make long
+       paths expensive before that step.
+    4. Final score = ``(1-p) · energy_norm + p · privacy_value`` (linear blend).
     """
     assert len(poi_positions) == NUM_POIS
 
@@ -113,26 +141,35 @@ def compute_poi_scores(
         cfg = AgentConfig(
             name="default", privacy_emphasis=0.0,
             energy_model="linear",
-            energy_exponential_gamma=0.12,
+            energy_exponential_gamma=2.0,
+            energy_step=1.0,
         )
 
     bfs_cur = bfs_distances(current_pos, obstacle_map)
     bfs_spn = bfs_distances(spawn, obstacle_map)
 
+    finite_spawn = bfs_spn[np.isfinite(bfs_spn)]
+    max_spawn_dist = float(finite_spawn.max()) if len(finite_spawn) > 0 else 1.0
+    if max_spawn_dist < 1e-12:
+        max_spawn_dist = 1.0
+
     raw_energy = np.zeros(NUM_POIS, dtype=np.float64)
-    raw_privacy = np.zeros(NUM_POIS, dtype=np.float64)
+    privacy_val = np.zeros(NUM_POIS, dtype=np.float64)
 
     for i, (pr, pc) in enumerate(poi_positions):
         d_cur = bfs_cur[pr, pc]
         d_spn = bfs_spn[pr, pc]
         raw_energy[i] = _energy_cost(d_cur, cfg) if np.isfinite(d_cur) else 1e9
-        raw_privacy[i] = float(d_spn) if np.isfinite(d_spn) else 0.0
+        if np.isfinite(d_spn) and d_spn >= 0:
+            privacy_val[i] = min(1.0, float(d_spn) / max_spawn_dist)
+        else:
+            privacy_val[i] = 0.0
 
-    energy_norm = 1.0 - _minmax(raw_energy)   # low cost → 1
-    privacy_norm = _minmax(raw_privacy)        # far from spawn → 1
+    # equal_fill: ties → minmax raw cost = 0 → energy_norm = 1 (all equally cheap)
+    energy_norm = 1.0 - _minmax(raw_energy, equal_fill=0.0)
 
-    p = cfg.privacy_emphasis
-    scores = (1.0 - p) * energy_norm + p * privacy_norm
+    p = float(cfg.privacy_emphasis)
+    scores = (1.0 - p) * energy_norm + p * privacy_val
     return scores.astype(np.float32)
 
 
@@ -183,6 +220,13 @@ def compute_eval_heatmap(
                 val = (poi_scores[i] / best_poi_score) * falloff
                 best_val = max(best_val, val)
             heatmap[r, c] = best_val
+
+    # Pin each POI cell to *that* POI's relative score.  Otherwise max_i
+    # (score_i * falloff_i) lets a nearby high-scoring POI "paint" another POI's
+    # cell bright green even when that POI has low preference (matches labels).
+    for k, (pr, pc) in enumerate(poi_positions):
+        if not obstacle_map[pr, pc]:
+            heatmap[pr, pc] = float(poi_scores[k] / best_poi_score)
 
     return np.clip(heatmap, 0.0, 1.0)
 

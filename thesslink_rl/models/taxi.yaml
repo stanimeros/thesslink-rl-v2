@@ -1,5 +1,5 @@
 name: Taxi
 privacy_emphasis: 0.3
 
+energy_step: 4.0
 energy_model: linear
-energy_exponential_gamma: 0.12

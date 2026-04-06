@@ -67,7 +67,7 @@ In **negotiation**, only the active agent may use actions **5–8**; the other i
 
 ## Evaluation (example: Drone)
 
-[`thesslink_rl/models/drone.yaml`](thesslink_rl/models/drone.yaml) sets **privacy emphasis** $\alpha = 0.4$ and a **linear** energy model. For each POI $k \in \{0,1,2\}$ the code builds two raw signals from BFS on the grid: travel cost from the agent’s **current** cell (energy) and path length from **spawn** (privacy). Each is min–max normalised across the three POIs so they lie in $[0,1]$; the energy term is flipped so **lower cost ⇒ higher value**. With $\tilde{E}_k$ the normalised “goodness” of reachability and $\tilde{P}_k$ the normalised privacy,
+[`thesslink_rl/models/drone.yaml`](thesslink_rl/models/drone.yaml) sets **privacy emphasis** $\alpha = 0.4$ and a **linear** energy model. For each POI $k$ the code uses **travel cost** from the agent’s **current** cell (min–max across the three POIs; lower cost ⇒ higher $\tilde{E}_k$) and **privacy** as spawn-to-POI BFS distance divided by the **maximum** BFS distance reachable from spawn on the map (not min–max across POIs), so $\tilde{P}_k\in[0,1]$ without forcing the nearest POI to privacy $0$ unless it is almost at spawn.
 
 $$
 s_k \;=\; (1-\alpha)\,\tilde{E}_k + \alpha\,\tilde{P}_k\,.

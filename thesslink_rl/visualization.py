@@ -41,6 +41,19 @@ POI_RANK_COLORS = ["#2ecc71", "#3498db", "#e74c3c"]  # green (best), blue (mid),
 AGENT_LABELS = {"agent_0": "A", "agent_1": "B"}
 
 
+def _heatmap_panel_subtitle(cfg: AgentConfig, agent_label: str) -> str:
+    """Eval heatmap title: agent name, privacy emphasis p, energy model (γ if exponential)."""
+    p = cfg.privacy_emphasis
+    p_str = f"p={p:g}"
+    if cfg.energy_model == "exponential":
+        eg = f"energy={cfg.energy_model} γ={cfg.energy_exponential_gamma:g}"
+    else:
+        eg = f"energy={cfg.energy_model}"
+    step = float(cfg.energy_step)
+    step_s = f"  step={step:g}" if abs(step - 1.0) > 1e-9 else ""
+    return f"{cfg.name} (Agent {agent_label})\n{p_str}  {eg}{step_s}"
+
+
 def _poi_colors(scores: np.ndarray | None) -> list[str]:
     """Return a color per POI index, ranked by score: green=best, blue=mid, red=worst.
 
@@ -120,7 +133,7 @@ def render_grid(
         size = 200 if env.agreed_poi == i else 120
         ax.scatter(pc + 0.5, pr + 0.5, marker=marker, s=size,
                    c=colors[i], edgecolors="white", linewidths=1.5, zorder=3)
-        score_label = f"P{i}: {poi_scores[i]:.2f}" if poi_scores is not None else f"P{i}"
+        score_label = f"P{i}: {poi_scores[i]:.3f}" if poi_scores is not None else f"P{i}"
         ax.text(pc + 0.5, pr + 0.15, score_label, ha="center", va="center",
                 fontsize=7, fontweight="bold", color="white",
                 bbox=dict(boxstyle="round,pad=0.15", fc="black", alpha=0.5) if poi_scores is not None else None,
@@ -213,7 +226,7 @@ def _draw_heatmap_panel(
         ax.scatter(pc + 0.5, pr + 0.5, marker=marker, s=size,
                    c=colors[i], edgecolors="white",
                    linewidths=1.5, zorder=4)
-        ax.text(pc + 0.5, pr + 0.15, f"P{i}: {poi_scores[i]:.2f}",
+        ax.text(pc + 0.5, pr + 0.15, f"P{i}: {poi_scores[i]:.3f}",
                 ha="center", va="center", fontsize=6,
                 fontweight="bold", color="white",
                 bbox=dict(boxstyle="round,pad=0.15", fc="black", alpha=0.5),
@@ -279,7 +292,7 @@ def render_eval_heatmaps(
         _draw_heatmap_panel(
             ax, heatmap, env, agent, cfg, spawn,
             poi_scores=scores,
-            subtitle=f"{cfg.name} (Agent {label})\np={cfg.privacy_emphasis}  energy={cfg.energy_model}",
+            subtitle=_heatmap_panel_subtitle(cfg, label),
         )
 
     merged_scores = np.mean(list(all_scores.values()), axis=0)

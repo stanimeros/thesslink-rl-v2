@@ -49,7 +49,7 @@ from thesslink_rl.visualization import (
 )
 
 PROJECT = Path(__file__).resolve().parent
-SEED = 42
+SEED = 105
 EXAMPLE_TAG = "example"
 
 ALGO_COLORS = {
