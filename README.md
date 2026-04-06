@@ -2,16 +2,79 @@
 
 Multi-Agent Reinforcement Learning environment where two agents **negotiate** over Points of Interest (POIs) on a 10x10 grid, then **navigate** to the agreed target. Both phases are **RL-trained** -- agents learn to negotiate through suggest/accept actions and to navigate with movement actions. Designed to plug into [EPyMARL](https://github.com/uoe-agents/epymarl) for training with algorithms like QMIX, MAPPO, VDN, IQL, and more.
 
+## The task (in short)
+
+Two agents start at random cells on a small map with obstacles and three candidate meeting spots (POIs). Each agent **likes** some POIs more than others: cheaper to reach (energy) and/or harder to infer where they came from (privacy), according to YAML “agent models.” They must **agree on one POI**, then **both reach it**. The episode succeeds only when everyone arrives at the chosen POI (in v1/v2, the first agent to arrive waits; negotiation rules differ by version).
+
+## Environment versions
+
+| Version | Gym id | Observation | Notes |
+|--------|--------|-------------|--------|
+| **v0** | `thesslink/GridNegotiation-v0` | 311-d flat grid (CNN-friendly) | Simultaneous “suggest POI” each step; agreement when both pick the same POI on the same step. |
+| **v1** | `thesslink/GridNegotiation-v1` | 19-d symbolic | Turn-based suggest / accept; cooperative meeting; GPS + lidar, no full grid in the vector. |
+| **v2** | `thesslink/GridNegotiation-v2` | Same 19-d as v1 | Same dynamics as v1 **plus** shaped rewards in the gym wrapper (negotiation hints, potential-based navigation, scaled bonuses). |
+
+The active version for local scripts (`visualize.py`, `train.sh`, etc.) is set in `config.py` as `ENV_VERSION` (default **2**). EPyMARL runs should use the matching env config, e.g. `thesslink_v2` for v2.
+
+## Evaluation: POI scores (module-based)
+
+Preference scores come from `thesslink_rl/evaluation.py` and the agent YAML (`energy_model`, `privacy_emphasis`, etc.):
+
+1. **Energy** — BFS shortest-path distance from the agent’s **current** cell to each POI is turned into a cost using either a **linear** or **exponential** step-cost model (`energy_model`, `energy_exponential_gamma`). Lower cost is better.
+2. **Privacy** — BFS distance from the agent’s **spawn** cell to each POI: farther from spawn is treated as more private.
+3. **Normalisation** — For each agent, energy and privacy values across the three POIs are **min–max normalised** to \([0, 1]\) so they are comparable before mixing.
+4. **Blend** — Per POI, the score is a convex mix:  
+   `score = (1 - p) * energy_norm + p * privacy_norm`  
+   where `p = privacy_emphasis` in \([0, 1]\).
+
+For **negotiation quality** (how good the agreed POI is for *both* agents), the code uses a **golden mean** over POIs: multiply each agent’s three POI scores pointwise, then compare the chosen POI’s product to the best possible product. That ratio (in \([0, 1]\)) scales shared rewards so near-optimal agreements are only slightly weaker than perfect ones. See `golden_mean_vector` and `negotiation_quality` in `evaluation.py`.
+
+## v2: observations, actions, and rewards
+
+**Observations** (`OBS_FLAT_SIZE = 19`): phase flag; three POI scores; one-hot of peer’s last suggestion (or none); one-hot of agreed POI; normalised self \((row, col)\); normalised vector toward the agreed POI in navigation (GPS); **lidar** — normalised distance to the nearest obstacle in north, south, east, west.
+
+**Actions** (`Discrete(9)`): `0–4` stay / up / down / left / right (navigation); `5–7` suggest POI 0–2; `8` accept the peer’s last suggestion. In negotiation, turns alternate: only the active agent may suggest or accept; the other is masked to a no-op. See `thesslink_rl/v2/environment.py`.
+
+**Rewards** (implemented in `thesslink_rl/v2/gym_wrapper.py`, not the bare env):
+
+- **Negotiation:** small shaping for good suggestions / persistence / fair accepts; when agreement is reached, all agents get **`+10 × negotiation_quality`** (quality from the golden-mean ratio above).
+- **Navigation:** potential-based shaping toward the target (BFS distance potential), **`-0.01`** per step, **`+10 × quality`** when an agent reaches the POI, and **`+50 × quality`** when **all** agents have arrived.
+
+## Training plots and episode GIFs (`visualize.py`)
+
+After training, Sacred metrics under `epymarl/results` (or `--results`), run:
+
+```bash
+python visualize.py
+```
+
+This writes under `plots/<env_tag>/` (e.g. `plots/v2/` when `ENV_VERSION=2`):
+
+- **`training_curves-all.png`** — comparison of mean reward and test metrics (negotiate rate, optimal negotiate, reach rate, episode length) across algorithms.
+- **`training_curves-<algo>.png`** — per-algorithm curves.
+- **`episode_replay-<algo>.gif`** — rollout from the best saved checkpoint per algorithm (requires checkpoints under `results/models`).
+
+Example comparison and replays (MAPPO and IQL):
+
+![Training curves — all algorithms](plots/v2/training_curves-all.png)
+
+| MAPPO | IQL |
+|-------|-----|
+| ![Episode replay — MAPPO](plots/v2/episode_replay-mappo.gif) | ![Episode replay — IQL](plots/v2/episode_replay-iql.gif) |
+
+With no results directory, `visualize.py` still emits placeholder `*-example.*` files for the same layout.
+
 ## Architecture
 
 | File | Purpose |
 |---|---|
-| `thesslink_rl/environment.py` | Core env -- 10x10 grid, obstacles, POIs, negotiation + navigation phases |
-| `thesslink_rl/evaluation.py` | POI preference scoring (energy, privacy) and Golden Mean reward |
-| `thesslink_rl/gym_wrapper.py` | Gymnasium multi-agent wrapper for EPyMARL compatibility |
-| `thesslink_rl/visualization.py` | Grid rendering, training curves, episode replay GIF |
+| `config.py` | `ENV_VERSION` selects v0 / v1 / v2 (`GridNegotiationEnv`, `ENV_TAG`, EPyMARL env name). |
+| `thesslink_rl/v0/environment.py`, `v1/`, `v2/` | Core env per version (grid vs symbolic; v2 matches v1 dynamics). |
+| `thesslink_rl/v2/gym_wrapper.py` | EPyMARL Gym wrapper for v2 — reward shaping. |
+| `thesslink_rl/evaluation.py` | POI preference scoring (energy, privacy, min–max), golden mean, negotiation quality. |
+| `thesslink_rl/visualization.py` | Grid rendering, training curves, episode replay GIF. |
 | `thesslink_rl/models/` | Agent type configs (YAML): human, taxi, drone |
-| `epymarl/src/config/envs/thesslink.yaml` | EPyMARL env config |
+| `epymarl_config/envs/thesslink*.yaml` | EPyMARL env configs (v0 / v1 / v2). |
 
 ## Quick Start
 
@@ -37,11 +100,14 @@ Copy ThessLink env configs into EPyMARL (add new `thesslink_*.yaml` files under 
 cp ../epymarl_config/envs/*.yaml src/config/envs/
 ```
 
-Then run any algorithm:
+Use **`thesslink`** for v0, **`thesslink_v2`** for v2 (matches default `ENV_VERSION=2` in `config.py`). Then run any algorithm:
 
 ```bash
-# QMIX (common reward)
+# QMIX (common reward) — v0
 python src/main.py --config=qmix --env-config=thesslink
+
+# QMIX — v2 (symbolic obs + shaped rewards)
+python src/main.py --config=qmix --env-config=thesslink_v2
 
 # MAPPO (individual rewards)
 python src/main.py --config=mappo --env-config=thesslink with common_reward=False
@@ -63,7 +129,9 @@ python src/main.py --config=qmix --env-config=gymma \
   with env_args.time_limit=60 env_args.key="thesslink_rl:thesslink/GridNegotiation-v0"
 ```
 
-## Environment
+## Environment (v0 — full grid observation)
+
+The section below matches **`thesslink/GridNegotiation-v0`**: simultaneous suggestions each step and a **311-dimensional** observation with a flattened grid. For **v2** (symbolic 19-d, turn-based negotiation, shaped rewards), see [v2: observations, actions, and rewards](#v2-observations-actions-and-rewards) above.
 
 ### Grid
 
@@ -168,15 +236,17 @@ energy_exponential_gamma: 0.12
 | IQL | Yes | Yes |
 | PAC | Yes | Yes |
 
-## Visualization
+## Visualization (Python API)
 
-The `thesslink_rl.visualization` module can still be used for rendering and debugging:
+The `thesslink_rl.visualization` module can be used for rendering and debugging. Use `GridNegotiationEnv` from `config` so it matches `ENV_VERSION`:
 
 ```python
+from config import GridNegotiationEnv
 from thesslink_rl.visualization import render_grid, capture_frame
-from thesslink_rl.environment import GridNegotiationEnv
 
 env = GridNegotiationEnv(seed=42)
 env.reset()
 render_grid(env, title="Initial State")
 ```
+
+For plots and GIFs from training runs, see [Training plots and episode GIFs](#training-plots-and-episode-gifs-visualizepy) above.
