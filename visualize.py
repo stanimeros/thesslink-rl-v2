@@ -11,24 +11,25 @@ the **best** saved checkpoint under ``results/models`` (random rollout only if
 missing checkpoint or load fails).
 
 Usage:
-    python visualize.py                            # all algos
-    python visualize.py --algo qmix mappo          # specific algos
-    python visualize.py --results epymarl/results  # custom path
-    python visualize.py --models /path/to/models   # checkpoints if not under <results>/models
+    python visualize.py --env 3                    # required unless stdin is a TTY (then prompted)
+    python visualize.py --env 2 --algo qmix mappo
+    python visualize.py --env 3 --results epymarl/results
+    python visualize.py --env 3 --models /path/to/models
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-
-from config import ENV_CONFIG, ENV_VERSION, ENV_TAG, GridNegotiationEnv
 from thesslink_rl.checkpoints import (
     describe_models_dir_status,
     find_best_checkpoint_timestep_dir,
@@ -69,6 +70,8 @@ def discover_runs(results_dir: Path) -> dict[str, dict]:
 
     Only runs whose path contains ``GridNegotiation-v{ENV_VERSION}`` are returned.
     """
+    from config import ENV_VERSION
+
     sacred_dir = results_dir / "sacred"
     if not sacred_dir.exists():
         print(f"No Sacred results at {sacred_dir}")
@@ -93,7 +96,7 @@ def discover_runs(results_dir: Path) -> dict[str, dict]:
     return runs
 
 
-def _sync_poi_scores(env: GridNegotiationEnv, agent_configs: dict[str, AgentConfig]) -> None:
+def _sync_poi_scores(env: Any, agent_configs: dict[str, AgentConfig]) -> None:
     """After ``reset``, fill ``env.poi_scores`` from spawn positions."""
     for agent in env.possible_agents:
         spawn = tuple(env.spawn_positions[agent])
@@ -108,6 +111,8 @@ def plot_comparison_curves(
     window: int = 10,
 ):
     """Plot all algorithms on the same figure for comparison."""
+    from config import ENV_TAG
+
     fig, axes = plt.subplots(1, 5, figsize=(27, 5))
 
     # Reward: common mean, or total Σ-agents mean when common_reward is off
@@ -173,6 +178,8 @@ def plot_comparison_curves(
 
 def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
     """Plot individual training curves per algorithm."""
+    from config import ENV_TAG
+
     for algo, metrics in runs.items():
         steps_arr, vals_arr = test_reward_series(metrics)
         steps = steps_arr.tolist() if steps_arr.size else []
@@ -203,6 +210,8 @@ def plot_per_algo_curves(runs: dict[str, dict], window: int = 10):
 
 def generate_example_plots() -> None:
     """Exactly three files when no training metrics: one demo per plot type."""
+    from config import ENV_TAG, GridNegotiationEnv
+
     models_dir = PROJECT / "thesslink_rl" / "models"
     cfg_0 = AgentConfig.from_yaml(str(models_dir / "human.yaml"))
     cfg_1 = AgentConfig.from_yaml(str(models_dir / "taxi.yaml"))
@@ -255,7 +264,7 @@ def generate_example_plots() -> None:
     print(f"  -> plots/{ENV_TAG}/{_make_filename('episode_replay', 'gif', EXAMPLE_TAG)}")
 
 
-def _random_episode_frames(env: GridNegotiationEnv, max_steps: int = 40) -> list[dict]:
+def _random_episode_frames(env: Any, max_steps: int = 40) -> list[dict]:
     """Fallback when no checkpoint or policy rollout fails (fixed RNG for reproducibility)."""
     rng = np.random.RandomState(99)
     frames = [capture_frame(env)]
@@ -287,6 +296,8 @@ def generate_heatmaps_and_replays(
     Episode GIFs are written **only** when a checkpoint can be loaded from
     *models_root* (default: *results_dir*/models). No random-policy GIFs.
     """
+    from config import ENV_CONFIG, ENV_TAG, ENV_VERSION, GridNegotiationEnv
+
     models_dir = PROJECT / "thesslink_rl" / "models"
     cfg_0 = AgentConfig.from_yaml(str(models_dir / "human.yaml"))
     cfg_1 = AgentConfig.from_yaml(str(models_dir / "taxi.yaml"))
@@ -391,8 +402,36 @@ def print_summary(runs: dict[str, dict]):
     print()
 
 
+def _resolve_env_version(cli_env: int | None) -> int:
+    if cli_env is not None:
+        return cli_env
+    if sys.stdin.isatty():
+        while True:
+            raw = input("ThessLink env version [0-3]: ").strip()
+            try:
+                v = int(raw)
+                if v in (0, 1, 2, 3):
+                    return v
+            except ValueError:
+                pass
+            print("  Enter 0, 1, 2, or 3.", file=sys.stderr)
+    print(
+        "Error: pass --env 0..3 (non-interactive).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visualize ThessLink RL training results")
+    parser.add_argument(
+        "--env",
+        type=int,
+        choices=[0, 1, 2, 3],
+        default=None,
+        metavar="N",
+        help="ThessLink env version (0–3). If omitted, prompted when stdin is a TTY.",
+    )
     parser.add_argument("--algo", nargs="+", default=None,
                         help="Algorithms to visualize (default: all found)")
     parser.add_argument("--results", type=str, default="epymarl/results",
@@ -406,6 +445,10 @@ def main():
     parser.add_argument("--window", type=int, default=10,
                         help="Smoothing window for curves")
     args = parser.parse_args()
+
+    v = _resolve_env_version(args.env)
+    os.environ["THESSLINK_ENV_VERSION"] = str(v)
+    from config import ENV_TAG, ENV_VERSION
 
     print(f"Using environment: {ENV_TAG} (ENV_VERSION={ENV_VERSION})")
 

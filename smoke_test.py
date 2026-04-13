@@ -3,18 +3,46 @@
 
 Usage:
     source .venv/bin/activate
-    python smoke_test.py
+    THESSLINK_ENV_VERSION=3 python smoke_test.py   # non-interactive
+    python smoke_test.py # prompts if stdin is a TTY
+
+``train.sh`` exports THESSLINK_ENV_VERSION before invoking this script.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+
+
+def _ensure_env_version_for_smoke() -> None:
+    if "THESSLINK_ENV_VERSION" in os.environ:
+        return
+    if sys.stdin.isatty():
+        while True:
+            raw = input("ThessLink env version [0-3]: ").strip()
+            try:
+                v = int(raw)
+                if v in (0, 1, 2, 3):
+                    os.environ["THESSLINK_ENV_VERSION"] = str(v)
+                    return
+            except ValueError:
+                pass
+            print("  Enter 0, 1, 2, or 3.", file=sys.stderr)
+    print(
+        "Error: set THESSLINK_ENV_VERSION=0..3 or run via train.sh.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+_ensure_env_version_for_smoke()
 
 from config import ENV_CONFIG, ENV_TAG, ENV_VERSION, GridNegotiationEnv
 from thesslink_rl.visualization import _make_filename

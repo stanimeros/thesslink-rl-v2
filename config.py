@@ -1,11 +1,22 @@
 """Single source of truth for the active environment version.
 
-Change ENV_VERSION here and it will propagate everywhere:
-  train.sh, visualize.py, smoke_test.py, and thesslink_rl.visualization helpers
-  (via GridNegotiationEnv / ENV_TAG from callers).
+There is **no** default: set ``THESSLINK_ENV_VERSION`` (``"0"``..``"3"``) in the
+environment before importing this module. ``train.sh`` and ``visualize.py`` set it
+after you pick a version (CLI flag or prompt).
 """
 
-ENV_VERSION = 3  # 0 = grid obs, 1 = symbolic obs, 2 = symbolic + shaping, 3 = v2 w/ dual-policy (18-D obs)
+import os
+
+if "THESSLINK_ENV_VERSION" not in os.environ:
+    raise RuntimeError(
+        "THESSLINK_ENV_VERSION is not set (expected 0–3). "
+        "Use ./train.sh --env N …, python visualize.py --env N, or export THESSLINK_ENV_VERSION=N.",
+    )
+ENV_VERSION = int(os.environ["THESSLINK_ENV_VERSION"])
+if ENV_VERSION not in (0, 1, 2, 3):
+    raise ValueError(
+        f"THESSLINK_ENV_VERSION must be 0–3, got {ENV_VERSION!r}",
+    )
 
 # --- Derived (do not edit) ------------------------------------------------
 

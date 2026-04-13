@@ -3,14 +3,17 @@
 # ThessLink RL -- Parallel training launcher
 #
 # Usage:
-#   ./train.sh                  # train all algorithms (iql qmix vdn mappo coma)
-#   ./train.sh qmix mappo       # train only qmix and mappo
-#   ./train.sh --status          # live dashboard (watch -n 2; Ctrl+C to stop)
-#   ./train.sh --kill            # kill all running training processes
+#   ./train.sh --env 3          # all algorithms on ThessLink env v3 (dual-policy)
+#   ./train.sh --env 2 qmix mappo
+#   ./train.sh                  # prompts for env version [0-3] if stdin is a TTY
+#   ./train.sh --status         # live dashboard (watch -n 2; Ctrl+C to stop)
+#   ./train.sh --kill           # kill all running training processes
 #
-# Results layout (epymarl/results/): logs/<alg>.log (nohup), sacred/, models/
-# The tree is wiped before smoke and again after smoke so full training only
-# sees fresh Sacred/model paths for the active ENV_CONFIG YAML.
+# Results layout (epymarl/results/):
+#   logs/v<N>/<alg>.log   — nohup (per env version; v2 and v3 runs are kept separate)
+#   sacred/…/GridNegotiation-v<N>/…
+#   models/…/GridNegotiation-v<N>_…/…
+# Before/after smoke we only delete data for the *active* v<N>, not other versions.
 #
 set -euo pipefail
 
@@ -27,8 +30,9 @@ cd "$SCRIPT_DIR"
 
 ALL_ALGOS=(iql qmix vdn mappo coma)
 RESULTS_DIR="epymarl/results"
-# Absolute path so --status-once works under watch/cron regardless of caller cwd.
-LOGS_DIR="$SCRIPT_DIR/$RESULTS_DIR/logs"
+# Absolute base; per-run nohup logs live in logs/v<N>/ (set after ENV_VERSION is known).
+RESULTS_DIR_ABS="$SCRIPT_DIR/$RESULTS_DIR"
+LOGS_ROOT="$RESULTS_DIR_ABS/logs"
 EPYMARL_SRC="epymarl/src"
 VENV=".venv/bin/activate"
 
@@ -43,28 +47,40 @@ kill_training() {
     pkill -f "$EPYMARL_SRC/main.py" 2>/dev/null && log "Killed." || log "No processes found."
 }
 
-# EPyMARL + Sacred write under epymarl/results/{sacred,models}; nohup logs: epymarl/results/logs/<alg>.log
+# Remove Sacred + model checkpoints + nohup logs only for env v<ver> (keep other versions).
 prepare_results_tree() {
     local phase="$1"
-    log "Resetting results tree ($phase)..."
-    rm -rf "$RESULTS_DIR"
-    mkdir -p "$LOGS_DIR" "$RESULTS_DIR/sacred" "$RESULTS_DIR/models"
+    local ver="${ENV_VERSION:-$THESSLINK_ENV_VERSION}"
+    log "Clearing results for env v${ver} only ($phase)..."
+    mkdir -p "$RESULTS_DIR_ABS/sacred" "$RESULTS_DIR_ABS/models" "$LOGS_ROOT/v${ver}"
+
+    local sbase="$RESULTS_DIR_ABS/sacred"
+    if [[ -d "$sbase" ]]; then
+        while IFS= read -r -d '' d; do
+            rm -rf "$d"
+        done < <(find "$sbase" -type d -name "GridNegotiation-v${ver}" -print0 2>/dev/null)
+    fi
+
+    local mbase="$RESULTS_DIR_ABS/models"
+    if [[ -d "$mbase" ]]; then
+        while IFS= read -r -d '' d; do
+            rm -rf "$d"
+        done < <(find "$mbase" -type d -name "GridNegotiation-v${ver}_*" -print0 2>/dev/null)
+    fi
+
+    rm -rf "$LOGS_ROOT/v${ver}"
+    mkdir -p "$LOGS_ROOT/v${ver}"
 }
 
-show_status() {
-    # grep exits 1 when there is no match; with pipefail + set -e that aborts the script
-    # before any row is printed. Stats lines can be missing early in training.
-    set +o pipefail
-    export LC_NUMERIC=C
-    echo ""
+_status_table_for_logs_dir() {
+    local log_root="$1"
     echo " ALG  |   T_ENV |   RETURN |   AGR% |    GM% | REACH% | EP_LEN"
     echo "------|---------|----------|--------|--------|--------|-------"
     for alg in "${ALL_ALGOS[@]}"; do
-        local logf="$LOGS_DIR/${alg}.log"
+        local logf="$log_root/${alg}.log"
         [ -f "$logf" ] || continue
         local tenv ret neg neg_opt reach eplen n n_perc no_perc r_perc
         tenv=$(grep -a 't_env:' "$logf" 2>/dev/null | tail -n1 | awk -F't_env: ' '{print $2}' | awk '{print $1}' | tr -d ',')
-        # Return columns: IQL/MAPPO use per-agent rewards; QMIX/VDN/COMA use aggregated (see algo_extra_args)
         ret=$(grep -a 'test_total_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_total_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
         if [ -z "$ret" ]; then
             ret=$(grep -a 'test_return_mean:' "$logf" 2>/dev/null | tail -n1 | awk -F'test_return_mean: ' '{print $2}' | awk '{print $1}' | tr -d ',')
@@ -87,8 +103,41 @@ show_status() {
         printf " %5s | %7s | %8.4f | %5.1f%% | %5.1f%% | %5.1f%% | %5.1f\n" \
             "$n" "${tenv:-0}" "${ret:-0}" "${n_perc:-0}" "${no_perc:-0}" "${r_perc:-0}" "${eplen:-0}"
     done
-    set -o pipefail
+}
+
+show_status() {
+    # grep exits 1 when there is no match; with pipefail + set -e that aborts the script
+    # before any row is printed. Stats lines can be missing early in training.
+    set +o pipefail
+    export LC_NUMERIC=C
     echo ""
+    local any_v=false
+    local vd
+    for vn in 0 1 2 3; do
+        vd="$LOGS_ROOT/v${vn}"
+        [[ -d "$vd" ]] || continue
+        any_v=true
+        echo "=== $(basename "$LOGS_ROOT")/$(basename "$vd") (ThessLink env v$(basename "$vd" | sed 's/^v//')) ==="
+        _status_table_for_logs_dir "$vd"
+        echo ""
+    done
+    local showed_legacy=false
+    if [[ "$any_v" == false ]] && [[ -d "$LOGS_ROOT" ]]; then
+        for alg in "${ALL_ALGOS[@]}"; do
+            if [[ -f "$LOGS_ROOT/${alg}.log" ]]; then
+                echo "=== logs/ (legacy flat layout) ==="
+                _status_table_for_logs_dir "$LOGS_ROOT"
+                echo ""
+                showed_legacy=true
+                break
+            fi
+        done
+    fi
+    if [[ "$any_v" == false ]] && [[ "$showed_legacy" == false ]]; then
+        echo "(No training logs under $LOGS_ROOT yet.)"
+        echo ""
+    fi
+    set -o pipefail
 }
 
 # ── Parse arguments ──────────────────────────────────────────────────────
@@ -107,6 +156,30 @@ if [[ "${1:-}" == "--kill" ]]; then
     kill_training
     exit 0
 fi
+
+# Env version for this run (exports THESSLINK_ENV_VERSION for config.py + smoke_test).
+if [[ "${1:-}" == "--env" && -n "${2:-}" ]]; then
+    export THESSLINK_ENV_VERSION="$2"
+    shift 2
+fi
+
+if [[ -z "${THESSLINK_ENV_VERSION:-}" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "ThessLink env version [0-3]: " THESSLINK_ENV_VERSION
+    else
+        err "Env version required: ./train.sh --env 3 …, or export THESSLINK_ENV_VERSION=3"
+        exit 1
+    fi
+fi
+
+case "${THESSLINK_ENV_VERSION}" in
+    0|1|2|3) ;;
+    *)
+        err "Invalid env version: ${THESSLINK_ENV_VERSION} (expected 0-3)"
+        exit 1
+        ;;
+esac
+export THESSLINK_ENV_VERSION
 
 # Algorithms to train: args or all
 if [[ $# -gt 0 ]]; then
@@ -215,6 +288,9 @@ fi
 
 prepare_results_tree "after smoke — full multi-algo training"
 
+LOGS_DIR="$LOGS_ROOT/v${ENV_VERSION}"
+mkdir -p "$LOGS_DIR"
+
 # ── Launch training ──────────────────────────────────────────────────────
 
 algo_extra_args() {
@@ -241,7 +317,9 @@ for alg in "${ALGOS[@]}"; do
         with \
         local_results_path=epymarl/results \
         save_model=True \
-        save_model_interval=50000 \
+        save_model_interval=200000 \
+        test_interval=50000 \
+        log_interval=50000 \
         t_max=2000000 \
         $extra \
         > "$logfile" 2>&1 &
@@ -257,4 +335,4 @@ done
 echo ""
 log "Monitor with:  ./train.sh --status"
 log "Kill all with: ./train.sh --kill"
-log "Tail a log:    tail -f $LOGS_DIR/<algo>.log"
+log "Tail a log:    tail -f $LOGS_ROOT/v<0-3>/<algo>.log"
