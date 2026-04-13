@@ -158,27 +158,26 @@ if [ ! -d "epymarl" ]; then
 fi
 
 log "Applying patches to EPyMARL..."
+PATCH_DIR="$SCRIPT_DIR/epymarl_config/patches"
+_patch_base="$PATCH_DIR/epymarl_01_thesslink_base.patch"
+_patch_dual="$PATCH_DIR/epymarl_02_dual_policy.patch"
+for _p in "$_patch_base" "$_patch_dual"; do
+  if [[ ! -f "$_p" ]]; then
+    err "Missing EPyMARL patch (commit it to the repo): $_p"
+    exit 1
+  fi
+done
 git -C epymarl checkout -- . 2>/dev/null || true
 # New files from patch 02 are untracked; remove so re-apply works after checkout -- .
 rm -f epymarl/src/controllers/dual_basic_controller.py \
     epymarl/src/modules/agents/dual_rnn_agent.py 2>/dev/null || true
-_patch_ok=0
-for _patch in \
-    epymarl_config/patches/epymarl_01_thesslink_base.patch \
-    epymarl_config/patches/epymarl_02_dual_policy.patch
-do
-  if git -C epymarl apply "$_patch"; then
-    :
-  else
-    _patch_ok=1
-    warn "Failed or already applied: $_patch"
+for _patch in "$_patch_base" "$_patch_dual"; do
+  if ! git -C epymarl apply "$_patch"; then
+    err "git apply failed: $_patch (fresh clone + upstream EPyMARL revision mismatch?)"
+    exit 1
   fi
 done
-if ((_patch_ok == 0)); then
-  log "Patches applied (thesslink base + dual-policy)."
-else
-  warn "One or more EPyMARL patches failed — check epymarl tree."
-fi
+log "Patches applied (thesslink base + dual-policy)."
 
 log "Copying ThessLink env YAMLs into EPyMARL (epymarl_config/envs/*.yaml)..."
 _copied=0
