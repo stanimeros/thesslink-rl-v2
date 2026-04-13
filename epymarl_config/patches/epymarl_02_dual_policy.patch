@@ -15,53 +15,61 @@ index e55344f..12e1768 100644
  REGISTRY["non_shared_mac"] = NonSharedMAC
  REGISTRY["maddpg_mac"] = MADDPGMAC
 \ No newline at end of file
-diff --git a/src/envs/__init__.py b/src/envs/__init__.py
-index 55fec42..b60277c 100644
---- a/src/envs/__init__.py
-+++ b/src/envs/__init__.py
-@@ -1,9 +1,18 @@
- import os
- import sys
- 
-+import warnings
+diff --git a/src/controllers/dual_basic_controller.py b/src/controllers/dual_basic_controller.py
+new file mode 100644
+index 0000000..a8e7162
+--- /dev/null
++++ b/src/controllers/dual_basic_controller.py
+@@ -0,0 +1,44 @@
++import torch as th
++import torch.nn.functional as F
 +
- from .multiagentenv import MultiAgentEnv
- from .gymma import GymmaWrapper
--from .smaclite_wrapper import SMACliteWrapper
++from .basic_controller import BasicMAC
 +
-+try:
-+    from .smaclite_wrapper import SMACliteWrapper
-+except (ImportError, ModuleNotFoundError):
-+    SMACliteWrapper = None
-+    warnings.warn(
-+        "SMAClite is not installed, so these environments will not be available!"
-+    )
- 
- 
- if sys.platform == "linux":
++
++class DualBasicMAC(BasicMAC):
++    """BasicMAC with two agent stacks; ``policy_branch`` selects negotiate vs navigate."""
++
++    def forward(self, ep_batch, t, test_mode=False):
++        agent_inputs = self._build_inputs(ep_batch, t)
++        bs = ep_batch.batch_size
++        branch = ep_batch["policy_branch"][:, t].squeeze(-1).long()
++        br_flat = branch.repeat_interleave(self.n_agents)
++
++        h_neg = self.hidden_states[0].reshape(bs * self.n_agents, -1)
++        h_nav = self.hidden_states[1].reshape(bs * self.n_agents, -1)
++
++        q_neg, h_neg_out = self.agent.neg_agent(agent_inputs, h_neg)
++        q_nav, h_nav_out = self.agent.nav_agent(agent_inputs, h_nav)
++
++        br_exp = br_flat.unsqueeze(-1).float()
++        agent_outs = q_neg * (1 - br_exp) + q_nav * br_exp
++        h_neg_new = h_neg_out * (1 - br_exp) + h_neg * br_exp
++        h_nav_new = h_nav_out * br_exp + h_nav * (1 - br_exp)
++
++        self.hidden_states = th.stack([h_neg_new, h_nav_new], dim=0).view(
++            2, bs, self.n_agents, -1
++        )
++
++        if self.agent_output_type == "pi_logits":
++            avail_actions = ep_batch["avail_actions"][:, t]
++            if getattr(self.args, "mask_before_softmax", True):
++                reshaped = avail_actions.reshape(bs * self.n_agents, -1)
++                agent_outs[reshaped == 0] = -1e10
++            agent_outs = F.softmax(agent_outs, dim=-1)
++
++        return agent_outs.view(bs, self.n_agents, -1)
++
++    def init_hidden(self, batch_size):
++        h = self.agent.init_hidden()
++        self.hidden_states = (
++            h.unsqueeze(1).expand(2, batch_size, self.n_agents, -1).contiguous()
++        )
 diff --git a/src/envs/gymma.py b/src/envs/gymma.py
-index aeba61f..c1b218b 100644
+index c452bc6..c1b218b 100644
 --- a/src/envs/gymma.py
 +++ b/src/envs/gymma.py
-@@ -120,6 +120,8 @@ class GymmaWrapper(MultiAgentEnv):
-         return self.n_agents * flatdim(self.longest_observation_space)
- 
-     def get_avail_actions(self):
-+        if hasattr(self._env.unwrapped, "get_avail_actions"):
-+            return self._env.unwrapped.get_avail_actions()
-         avail_actions = []
-         for agent_id in range(self.n_agents):
-             avail_agent = self.get_avail_agent_actions(agent_id)
-@@ -128,6 +130,8 @@ class GymmaWrapper(MultiAgentEnv):
- 
-     def get_avail_agent_actions(self, agent_id):
-         """Returns the available actions for agent_id"""
-+        if hasattr(self._env.unwrapped, "get_avail_actions"):
-+            return self._env.unwrapped.get_avail_actions()[agent_id]
-         valid = flatdim(self._env.action_space[agent_id]) * [1]
-         invalid = [0] * (self.longest_action_space.n - len(valid))
-         return valid + invalid
-@@ -157,3 +161,13 @@ class GymmaWrapper(MultiAgentEnv):
+@@ -161,3 +161,13 @@ class GymmaWrapper(MultiAgentEnv):
  
      def get_stats(self):
          return {}
@@ -91,6 +99,33 @@ index d159175..8085f05 100644
  REGISTRY["rnn_ns"] = RNNNSAgent
  REGISTRY["rnn_feat"] = RNNFeatureAgent
 +REGISTRY["dual_rnn"] = DualRNNAgent
+diff --git a/src/modules/agents/dual_rnn_agent.py b/src/modules/agents/dual_rnn_agent.py
+new file mode 100644
+index 0000000..67422d6
+--- /dev/null
++++ b/src/modules/agents/dual_rnn_agent.py
+@@ -0,0 +1,21 @@
++# Dual RNN stacks: separate parameters for negotiation (branch 0) vs navigation (branch 1).
++
++import torch as th
++import torch.nn as nn
++
++from .rnn_agent import RNNAgent
++
++
++class DualRNNAgent(nn.Module):
++    """Two RNNAgent modules; the runner selects which to use via ``policy_branch``."""
++
++    def __init__(self, input_shape, args):
++        super().__init__()
++        self.args = args
++        self.neg_agent = RNNAgent(input_shape, args)
++        self.nav_agent = RNNAgent(input_shape, args)
++
++    def init_hidden(self):
++        h0 = self.neg_agent.init_hidden()
++        h1 = self.nav_agent.init_hidden()
++        return th.stack([h0, h1], dim=0)
 diff --git a/src/run.py b/src/run.py
 index 41e0a38..3af4f8c 100644
 --- a/src/run.py
@@ -139,7 +174,7 @@ index c84af50..48d7701 100644
              print(f"Episode return: {episode_return}")
          self.batch.update(last_data, ts=self.t)
 diff --git a/src/runners/parallel_runner.py b/src/runners/parallel_runner.py
-index 5962c60..a211f0e 100644
+index 5962c60..7dbcf39 100644
 --- a/src/runners/parallel_runner.py
 +++ b/src/runners/parallel_runner.py
 @@ -94,12 +94,16 @@ class ParallelRunner:
@@ -179,7 +214,7 @@ index 5962c60..a211f0e 100644
  
              # Add post_transiton data into the batch
              self.batch.update(
-@@ -299,27 +309,29 @@ def env_worker(remote, env_fn):
+@@ -299,27 +309,27 @@ def env_worker(remote, env_fn):
              state = env.get_state()
              avail_actions = env.get_avail_actions()
              obs = env.get_obs()
@@ -196,11 +231,9 @@ index 5962c60..a211f0e 100644
 -                }
 -            )
 +            payload = {
-+                # Data for the next timestep needed to pick an action
 +                "state": state,
 +                "avail_actions": avail_actions,
 +                "obs": obs,
-+                # Rest of the data for the current timestep
 +                "reward": reward,
 +                "terminated": terminated,
 +                "info": env_info,

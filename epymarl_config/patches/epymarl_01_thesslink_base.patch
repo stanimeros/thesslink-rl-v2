@@ -1,0 +1,46 @@
+diff --git a/src/envs/__init__.py b/src/envs/__init__.py
+index 55fec42..b60277c 100644
+--- a/src/envs/__init__.py
++++ b/src/envs/__init__.py
+@@ -1,9 +1,18 @@
+ import os
+ import sys
+ 
++import warnings
++
+ from .multiagentenv import MultiAgentEnv
+ from .gymma import GymmaWrapper
+-from .smaclite_wrapper import SMACliteWrapper
++
++try:
++    from .smaclite_wrapper import SMACliteWrapper
++except (ImportError, ModuleNotFoundError):
++    SMACliteWrapper = None
++    warnings.warn(
++        "SMAClite is not installed, so these environments will not be available!"
++    )
+ 
+ 
+ if sys.platform == "linux":
+diff --git a/src/envs/gymma.py b/src/envs/gymma.py
+index aeba61f..c452bc6 100644
+--- a/src/envs/gymma.py
++++ b/src/envs/gymma.py
+@@ -120,6 +120,8 @@ class GymmaWrapper(MultiAgentEnv):
+         return self.n_agents * flatdim(self.longest_observation_space)
+ 
+     def get_avail_actions(self):
++        if hasattr(self._env.unwrapped, "get_avail_actions"):
++            return self._env.unwrapped.get_avail_actions()
+         avail_actions = []
+         for agent_id in range(self.n_agents):
+             avail_agent = self.get_avail_agent_actions(agent_id)
+@@ -128,6 +130,8 @@ class GymmaWrapper(MultiAgentEnv):
+ 
+     def get_avail_agent_actions(self, agent_id):
+         """Returns the available actions for agent_id"""
++        if hasattr(self._env.unwrapped, "get_avail_actions"):
++            return self._env.unwrapped.get_avail_actions()[agent_id]
+         valid = flatdim(self._env.action_space[agent_id]) * [1]
+         invalid = [0] * (self.longest_action_space.n - len(valid))
+         return valid + invalid
