@@ -5,7 +5,7 @@ Change ENV_VERSION here and it will propagate everywhere:
   (via GridNegotiationEnv / ENV_TAG from callers).
 """
 
-ENV_VERSION = 2  # 0 = grid obs, 1 = symbolic obs, 2 = symbolic + shaping, 3 = v2 w/ dual-policy (18-D obs)
+ENV_VERSION = 3  # 0 = grid obs, 1 = symbolic obs, 2 = symbolic + shaping, 3 = v2 w/ dual-policy (18-D obs)
 
 # --- Derived (do not edit) ------------------------------------------------
 
